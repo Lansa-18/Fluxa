@@ -4,6 +4,11 @@
 
 Fluxa is a programmable payments API built on the [Stellar](https://stellar.org) network. It gives fintech products and developers the primitives to move value across borders — wallet management, internal transfers, FX conversion via Stellar path payments, and settlement — behind a clean REST API.
 
+[![Run in Postman](https://img.shields.io/badge/Run%20in%20Postman-FF6C37?style=for-the-badge&logo=postman&logoColor=white)](docs/fluxa.postman_collection.json)
+[![Environment](https://img.shields.io/badge/Environment-FF6C37?style=for-the-badge&logo=postman&logoColor=white)](docs/fluxa.postman_environment.json)
+[![Quickstart](https://img.shields.io/badge/Quickstart-36C5F0?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/quickstart.md)
+[![Errors](https://img.shields.io/badge/Error%20Reference-CD5C5C?style=for-the-badge&logo=readthedocs&logoColor=white)](docs/errors.md)
+
 > **Status**: Active development — testnet only.
 
 ---
@@ -217,6 +222,23 @@ GET    /v1/webhooks/:id/deliveries  Delivery log
 GET /v1/usage              Current period: request count, transfer volume, rate limit
 GET /v1/fees               Your fee schedule
 GET /health                Health check
+```
+
+---
+
+## Integration Resources
+
+| Resource | Description |
+|---|---|
+| [Quickstart Guide](docs/quickstart.md) | End-to-end walkthrough from account creation to webhook delivery — with exact curl commands |
+| [Postman Collection](docs/fluxa.postman_collection.json) | Pre-configured requests for every endpoint, organised by folder, with tests and pre-request scripts |
+| [Postman Environment](docs/fluxa.postman_environment.json) | Testnet and mainnet environment variables — switch between targets with one click |
+| [Error Reference](docs/errors.md) | Complete list of every error code, HTTP status, description, resolution, and example response |
+
+```bash
+# Import the collection via the Postman CLI (requires Postman CLI installed)
+postman collection import docs/fluxa.postman_collection.json
+postman environment import docs/fluxa.postman_environment.json
 ```
 
 ---
