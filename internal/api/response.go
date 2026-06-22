@@ -44,11 +44,14 @@ func InternalError(w http.ResponseWriter, err error) {
 func HandleDomainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
-		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound):
+		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
+		errors.Is(err, domain.ErrFiatDepositNotFound), errors.Is(err, domain.ErrFiatWithdrawalNotFound):
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
-		errors.Is(err, domain.ErrFeeScheduleNotFound):
+		errors.Is(err, domain.ErrFeeScheduleNotFound), errors.Is(err, domain.ErrFiatProviderNotFound),
+		errors.Is(err, domain.ErrFiatQuoteExpired), errors.Is(err, domain.ErrUnsupportedCountry),
+		errors.Is(err, domain.ErrFiatWebhookVerification):
 		BadRequest(w, err.Error())
 	default:
 		InternalError(w, err)

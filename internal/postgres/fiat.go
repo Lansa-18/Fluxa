@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/fluxa/fluxa/internal/domain"
@@ -19,12 +20,13 @@ func NewFiatRepo(db *pgxpool.Pool) *FiatRepo {
 
 func (r *FiatRepo) CreateDeposit(ctx context.Context, d *domain.FiatDeposit) error {
 	query := `
-		INSERT INTO fiat_deposits (id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO fiat_deposits (id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, status, instructions, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
+	instructionsJSON, _ := json.Marshal(d.Instructions)
 	_, err := r.db.Exec(ctx, query,
 		d.ID, d.WalletID, d.Provider, d.ProviderReference,
-		d.FiatAmount, d.FiatCurrency, d.USDCAmount, d.Status, d.CreatedAt,
+		d.FiatAmount, d.FiatCurrency, d.USDCAmount, d.Status, instructionsJSON, d.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert fiat deposit: %w", err)
@@ -38,15 +40,23 @@ func (r *FiatRepo) UpdateDepositStatus(ctx context.Context, id, status string) e
 	return err
 }
 
+func (r *FiatRepo) UpdateDepositInstructions(ctx context.Context, id string, instructions map[string]string) error {
+	instructionsJSON, _ := json.Marshal(instructions)
+	query := `UPDATE fiat_deposits SET instructions = $1 WHERE id = $2`
+	_, err := r.db.Exec(ctx, query, instructionsJSON, id)
+	return err
+}
+
 func (r *FiatRepo) GetDepositByReference(ctx context.Context, ref string) (*domain.FiatDeposit, error) {
 	query := `
-		SELECT id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, status, created_at
+		SELECT id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, COALESCE(instructions, '{}'), status, created_at
 		FROM fiat_deposits WHERE provider_reference = $1
 	`
 	var d domain.FiatDeposit
+	var instructionsJSON []byte
 	err := r.db.QueryRow(ctx, query, ref).Scan(
 		&d.ID, &d.WalletID, &d.Provider, &d.ProviderReference,
-		&d.FiatAmount, &d.FiatCurrency, &d.USDCAmount, &d.Status, &d.CreatedAt,
+		&d.FiatAmount, &d.FiatCurrency, &d.USDCAmount, &instructionsJSON, &d.Status, &d.CreatedAt,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -54,6 +64,28 @@ func (r *FiatRepo) GetDepositByReference(ctx context.Context, ref string) (*doma
 		}
 		return nil, err
 	}
+	json.Unmarshal(instructionsJSON, &d.Instructions)
+	return &d, nil
+}
+
+func (r *FiatRepo) GetDepositByID(ctx context.Context, id string) (*domain.FiatDeposit, error) {
+	query := `
+		SELECT id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, COALESCE(instructions, '{}'), status, created_at
+		FROM fiat_deposits WHERE id = $1
+	`
+	var d domain.FiatDeposit
+	var instructionsJSON []byte
+	err := r.db.QueryRow(ctx, query, id).Scan(
+		&d.ID, &d.WalletID, &d.Provider, &d.ProviderReference,
+		&d.FiatAmount, &d.FiatCurrency, &d.USDCAmount, &instructionsJSON, &d.Status, &d.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("deposit not found")
+		}
+		return nil, err
+	}
+	json.Unmarshal(instructionsJSON, &d.Instructions)
 	return &d, nil
 }
 
@@ -85,6 +117,25 @@ func (r *FiatRepo) GetWithdrawalByReference(ctx context.Context, ref string) (*d
 	`
 	var w domain.FiatWithdrawal
 	err := r.db.QueryRow(ctx, query, ref).Scan(
+		&w.ID, &w.WalletID, &w.Provider, &w.ProviderReference,
+		&w.FiatAmount, &w.FiatCurrency, &w.USDCAmount, &w.Status, &w.CreatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("withdrawal not found")
+		}
+		return nil, err
+	}
+	return &w, nil
+}
+
+func (r *FiatRepo) GetWithdrawalByID(ctx context.Context, id string) (*domain.FiatWithdrawal, error) {
+	query := `
+		SELECT id, wallet_id, provider, provider_reference, fiat_amount, fiat_currency, usdc_amount, status, created_at
+		FROM fiat_withdrawals WHERE id = $1
+	`
+	var w domain.FiatWithdrawal
+	err := r.db.QueryRow(ctx, query, id).Scan(
 		&w.ID, &w.WalletID, &w.Provider, &w.ProviderReference,
 		&w.FiatAmount, &w.FiatCurrency, &w.USDCAmount, &w.Status, &w.CreatedAt,
 	)

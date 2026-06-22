@@ -24,6 +24,9 @@ type Config struct {
 	PlatformWalletID           string
 	FlutterwaveSecretKey       string
 	FlutterwaveWebhookHash     string
+	YellowCardAPIKey           string
+	YellowCardWebhookKey       string
+	YellowCardSandbox          bool
 }
 
 func Load() (*Config, error) {
@@ -34,12 +37,12 @@ func Load() (*Config, error) {
     viper.SetDefault("STELLAR_NETWORK", "testnet")
     viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
     viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
-    viper.SetDefault("FX_SPREAD_BPS", "50") // default 0.5%
+    viper.SetDefault("FX_SPREAD_BPS", "50")
+    viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
 
-    // Load .env file if present (dev convenience)
     viper.SetConfigFile(".env")
     viper.SetConfigType("env")
-    _ = viper.ReadInConfig() // ignore if not exist
+    _ = viper.ReadInConfig()
 
     required := []string{"DATABASE_URL", "REDIS_URL", "MASTER_ENCRYPTION_KEY"}
     for _, key := range required {
@@ -57,6 +60,8 @@ func Load() (*Config, error) {
         return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
     }
 
+    ycSandbox, _ := strconv.ParseBool(viper.GetString("YELLOW_CARD_SANDBOX"))
+
 	return &Config{
 		Port:              viper.GetString("PORT"),
 		Env:               viper.GetString("ENV"),
@@ -73,5 +78,8 @@ func Load() (*Config, error) {
 		PlatformWalletID:           viper.GetString("PLATFORM_WALLET_ID"),
 		FlutterwaveSecretKey:       viper.GetString("FLUTTERWAVE_SECRET_KEY"),
 		FlutterwaveWebhookHash:     viper.GetString("FLUTTERWAVE_WEBHOOK_HASH"),
+		YellowCardAPIKey:           viper.GetString("YELLOW_CARD_API_KEY"),
+		YellowCardWebhookKey:       viper.GetString("YELLOW_CARD_WEBHOOK_KEY"),
+		YellowCardSandbox:          ycSandbox,
 	}, nil
 }

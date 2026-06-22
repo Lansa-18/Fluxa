@@ -15,6 +15,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
+	"github.com/fluxa/fluxa/internal/fiat/yellowcard"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
@@ -83,7 +84,9 @@ func main() {
 	webhookSvc := webhook.NewService(webhookRepo, queueClient)
 
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
-	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
+	ycProvider := yellowcard.NewProvider(cfg.YellowCardAPIKey, cfg.YellowCardWebhookKey, cfg.YellowCardSandbox)
+
+	fiatSvc := fiat.NewService(fiatRepo, []fiat.Provider{fwProvider, ycProvider}, fxSvc, transferSvc, cfg.PlatformWalletID)
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
@@ -104,11 +107,9 @@ func main() {
 	fiatHandler := fiat.NewHandler(fiatSvc)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
-
-	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo, cfg.Port)
 	webhookHandler := webhook.NewHandler(webhookSvc)
 
-	srv := server.New(walletHandler, transferHandler, fxHandler, feeHandler, reconcileHandler, webhookHandler, cfg.Port)
+	srv := server.New(walletHandler, transferHandler, fxHandler, fiatHandler, feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo, webhookHandler, cfg.Port)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

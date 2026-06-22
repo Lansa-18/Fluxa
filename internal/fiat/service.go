@@ -3,6 +3,7 @@ package fiat
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
@@ -15,42 +16,82 @@ import (
 type Repository interface {
 	CreateDeposit(ctx context.Context, d *domain.FiatDeposit) error
 	UpdateDepositStatus(ctx context.Context, id, status string) error
+	UpdateDepositInstructions(ctx context.Context, id string, instructions map[string]string) error
 	GetDepositByReference(ctx context.Context, ref string) (*domain.FiatDeposit, error)
+	GetDepositByID(ctx context.Context, id string) (*domain.FiatDeposit, error)
 	CreateWithdrawal(ctx context.Context, w *domain.FiatWithdrawal) error
 	UpdateWithdrawalStatus(ctx context.Context, id, status string) error
 	GetWithdrawalByReference(ctx context.Context, ref string) (*domain.FiatWithdrawal, error)
+	GetWithdrawalByID(ctx context.Context, id string) (*domain.FiatWithdrawal, error)
 }
 
 type Service interface {
+	GetQuote(ctx context.Context, fiatCurrency, country, amount string) (*FiatQuote, error)
 	InitiateDeposit(ctx context.Context, req DepositRequest) (*DepositResponse, error)
 	InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (*WithdrawResponse, error)
-	HandleWebhook(ctx context.Context, payload []byte, signature string) error
+	HandleWebhook(ctx context.Context, provider string, payload []byte, headers map[string]string) error
 }
 
 type service struct {
 	repo             Repository
-	rail             Rail
+	providers        map[string]Provider
 	fxSvc            fx.Service
 	transferSvc      transfer.Service
 	platformWalletID string
-	providerName     string
 }
 
-func NewService(repo Repository, rail Rail, fxSvc fx.Service, transferSvc transfer.Service, platformWalletID, providerName string) Service {
+func NewService(repo Repository, providers []Provider, fxSvc fx.Service, transferSvc transfer.Service, platformWalletID string) Service {
+	pm := make(map[string]Provider, len(providers))
+	for _, p := range providers {
+		pm[p.Name()] = p
+	}
 	return &service{
 		repo:             repo,
-		rail:             rail,
+		providers:        pm,
 		fxSvc:            fxSvc,
 		transferSvc:      transferSvc,
 		platformWalletID: platformWalletID,
-		providerName:     providerName,
 	}
 }
 
+func (s *service) provider(name string) (Provider, error) {
+	p, ok := s.providers[name]
+	if !ok {
+		return nil, fmt.Errorf("unknown fiat provider: %s", name)
+	}
+	return p, nil
+}
+
+func (s *service) GetQuote(ctx context.Context, fiatCurrency, country, amount string) (*FiatQuote, error) {
+	fiatAmt, err := decimal.NewFromString(amount)
+	if err != nil || fiatAmt.LessThanOrEqual(decimal.Zero) {
+		return nil, fmt.Errorf("invalid amount")
+	}
+
+	for _, p := range s.providers {
+		for _, c := range p.SupportedCountries() {
+			if c == country {
+				return p.GetQuote(ctx, QuoteRequest{
+					FiatCurrency: fiatCurrency,
+					FiatAmount:   fiatAmt,
+					Country:      country,
+				})
+			}
+		}
+	}
+	return nil, fmt.Errorf("no provider supports country %s", country)
+}
+
 func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*DepositResponse, error) {
-	// First get a quote for USDC to ensure conversion is possible and to record expected amount
-	// In deposit, user pays Fiat (Source), gets USDC (Dest).
-	quote, err := s.fxSvc.GetQuote(ctx, req.FiatCurrency, "USDC", req.FiatAmount.String())
+	p, err := s.provider("flutterwave")
+	if err != nil {
+		return nil, err
+	}
+
+	quote, err := p.GetQuote(ctx, QuoteRequest{
+		FiatCurrency: req.FiatCurrency,
+		FiatAmount:   req.FiatAmount,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get quote for deposit: %w", err)
 	}
@@ -58,11 +99,11 @@ func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*Dep
 	deposit := &domain.FiatDeposit{
 		ID:                uuid.New().String(),
 		WalletID:          req.WalletID,
-		Provider:          s.providerName,
+		Provider:          p.Name(),
 		ProviderReference: req.Reference,
 		FiatAmount:        req.FiatAmount,
 		FiatCurrency:      req.FiatCurrency,
-		USDCAmount:        quote.DestAmount, // amount of USDC to credit user
+		USDCAmount:        quote.USDCAmount,
 		Status:            domain.FiatStatusPending,
 		CreatedAt:         time.Now().UTC(),
 	}
@@ -71,39 +112,35 @@ func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*Dep
 		return nil, fmt.Errorf("create deposit record: %w", err)
 	}
 
-	resp, err := s.rail.Deposit(ctx, req)
+	inst, err := p.InitiateDeposit(ctx, req)
 	if err != nil {
 		_ = s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusFailed)
-		return nil, fmt.Errorf("rail deposit error: %w", err)
+		return nil, fmt.Errorf("provider deposit error: %w", err)
 	}
 
-	return resp, nil
+	if err := s.repo.UpdateDepositInstructions(ctx, deposit.ID, inst.Instructions); err != nil {
+		return nil, fmt.Errorf("update deposit instructions: %w", err)
+	}
+
+	return &DepositResponse{
+		PaymentLink: inst.Instructions["payment_link"],
+		Reference:   inst.ProviderRef,
+	}, nil
 }
 
 func (s *service) InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (*WithdrawResponse, error) {
-	// For withdrawal, user provides Fiat amount they want to receive. 
-	// The source is USDC, the dest is Fiat. 
-	// Note: fxSvc.GetQuote takes (sourceAsset, destAsset, sourceAmount)
-	// So we need to calculate how much USDC is needed for req.FiatAmount.
-	// As a simplification, let's treat the fiat amount as the "destAmount",
-	// but GetQuote wants sourceAmount. 
-	// To simplify for this integration, we will use a fixed rate or inverse if needed.
-	// Actually, GetQuote might not support fiat assets yet in stellar paths natively,
-	// so for this demo, we'll use a mocked quote response if GetQuote fails for Fiat, 
-	// but let's assume GetQuote works or we simulate it.
-	
-	// Because Fluxa uses Stellar FindPathsStrict, which requires Stellar assets, 
-	// "NGN" might not exist on Stellar unless issued. 
-	// Let's assume there's a 1 USDC = 1000 NGN fixed rate for this abstraction 
-	// if fx.Service fails, or we just manually define the USDC amount.
-	
-	rate := decimal.NewFromInt(1500) // 1 USDC = 1500 NGN
+	p, err := s.provider("flutterwave")
+	if err != nil {
+		return nil, err
+	}
+
+	rate := decimal.NewFromInt(1500)
 	usdcAmount := req.FiatAmount.Div(rate)
 
 	withdrawal := &domain.FiatWithdrawal{
 		ID:                uuid.New().String(),
 		WalletID:          req.WalletID,
-		Provider:          s.providerName,
+		Provider:          p.Name(),
 		ProviderReference: req.Reference,
 		FiatAmount:        req.FiatAmount,
 		FiatCurrency:      req.FiatCurrency,
@@ -116,72 +153,100 @@ func (s *service) InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (
 		return nil, fmt.Errorf("create withdrawal record: %w", err)
 	}
 
-	// Debit user wallet, credit platform wallet
-	_, err := s.transferSvc.InitiateTransfer(ctx, req.WalletID, s.platformWalletID, "USDC", usdcAmount)
+	_, err = s.transferSvc.InitiateTransfer(ctx, req.WalletID, s.platformWalletID, "USDC", usdcAmount)
 	if err != nil {
 		_ = s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed)
 		return nil, fmt.Errorf("initiate transfer to platform: %w", err)
 	}
 
-	resp, err := s.rail.Withdraw(ctx, req)
-	if err != nil {
-		_ = s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed)
-		return nil, fmt.Errorf("rail withdraw error: %w", err)
+	wReq := WithdrawalRequest{
+		WalletID:      req.WalletID,
+		ProviderRef:   req.Reference,
+		FiatAmount:    req.FiatAmount,
+		FiatCurrency:  req.FiatCurrency,
+		AccountBank:   req.AccountBank,
+		AccountNumber: req.AccountNumber,
 	}
 
-	return resp, nil
+	result, err := p.InitiateWithdrawal(ctx, wReq)
+	if err != nil {
+		_ = s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed)
+		return nil, fmt.Errorf("provider withdraw error: %w", err)
+	}
+
+	return &WithdrawResponse{
+		Reference: result.ProviderRef,
+		Status:    result.Status,
+	}, nil
 }
 
-func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature string) error {
-	evt, err := s.rail.HandleWebhook(ctx, payload, signature)
+func (s *service) HandleWebhook(ctx context.Context, providerName string, payload []byte, headers map[string]string) error {
+	p, err := s.provider(providerName)
+	if err != nil {
+		return err
+	}
+
+	httpHeaders := make(http.Header)
+	for k, v := range headers {
+		httpHeaders.Set(k, v)
+	}
+
+	evt, err := p.HandleWebhook(ctx, payload, httpHeaders)
 	if err != nil {
 		return fmt.Errorf("handle webhook: %w", err)
 	}
 
-	if evt.Type == "deposit" || evt.Type == "charge.completed" {
-		deposit, err := s.repo.GetDepositByReference(ctx, evt.Reference)
+	switch evt.Type {
+	case EventDepositConfirmed:
+		deposit, err := s.repo.GetDepositByReference(ctx, evt.ProviderRef)
 		if err != nil {
 			return fmt.Errorf("get deposit by ref: %w", err)
 		}
-
 		if deposit.Status != domain.FiatStatusPending {
-			return nil // already processed
+			return nil
+		}
+		_, err = s.transferSvc.InitiateTransfer(ctx, s.platformWalletID, deposit.WalletID, "USDC", deposit.USDCAmount)
+		if err != nil {
+			return fmt.Errorf("credit user wallet: %w", err)
+		}
+		if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusCompleted); err != nil {
+			return fmt.Errorf("update deposit status: %w", err)
 		}
 
-		if evt.Status == "completed" {
-			// Credit the user
-			_, err = s.transferSvc.InitiateTransfer(ctx, s.platformWalletID, deposit.WalletID, "USDC", deposit.USDCAmount)
-			if err != nil {
-				return fmt.Errorf("credit user wallet: %w", err)
-			}
-			if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusCompleted); err != nil {
-				return fmt.Errorf("update deposit status: %w", err)
-			}
-		} else if evt.Status == "failed" {
-			if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusFailed); err != nil {
-				return fmt.Errorf("update deposit status: %w", err)
-			}
+	case EventDepositFailed:
+		deposit, err := s.repo.GetDepositByReference(ctx, evt.ProviderRef)
+		if err != nil {
+			return fmt.Errorf("get deposit by ref: %w", err)
+		}
+		if deposit.Status != domain.FiatStatusPending {
+			return nil
+		}
+		if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusFailed); err != nil {
+			return fmt.Errorf("update deposit status: %w", err)
 		}
 
-	} else if evt.Type == "withdraw" || evt.Type == "transfer.completed" {
-		withdrawal, err := s.repo.GetWithdrawalByReference(ctx, evt.Reference)
+	case EventWithdrawalSent:
+		withdrawal, err := s.repo.GetWithdrawalByReference(ctx, evt.ProviderRef)
 		if err != nil {
 			return fmt.Errorf("get withdrawal by ref: %w", err)
 		}
-
 		if withdrawal.Status != domain.FiatStatusPending {
 			return nil
 		}
+		if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusCompleted); err != nil {
+			return fmt.Errorf("update withdrawal status: %w", err)
+		}
 
-		if evt.Status == "completed" {
-			if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusCompleted); err != nil {
-				return fmt.Errorf("update withdrawal status: %w", err)
-			}
-		} else if evt.Status == "failed" {
-			// We might need to refund the user here. For now just mark failed.
-			if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed); err != nil {
-				return fmt.Errorf("update withdrawal status: %w", err)
-			}
+	case EventWithdrawalFailed:
+		withdrawal, err := s.repo.GetWithdrawalByReference(ctx, evt.ProviderRef)
+		if err != nil {
+			return fmt.Errorf("get withdrawal by ref: %w", err)
+		}
+		if withdrawal.Status != domain.FiatStatusPending {
+			return nil
+		}
+		if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed); err != nil {
+			return fmt.Errorf("update withdrawal status: %w", err)
 		}
 	}
 

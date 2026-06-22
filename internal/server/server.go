@@ -62,6 +62,7 @@ func New(
 		r.Route("/admin/fees", feeHandler.AdminRoutes())
 		r.Route("/admin", reconcileHandler.AdminRoutes())
 		r.Route("/webhooks", webhookHandler.Routes())
+		r.Route("/fiat", fiatHandler.FiatRoutes())
 	})
 
 	srv := &http.Server{
