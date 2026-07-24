@@ -132,7 +132,12 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", resp.GetHash()).Msg("failed to update confirmed status")
 	}
 
+	// Update cached balances for source and destination wallets for the transferred asset
+	e.syncWalletBalances(ctx, srcWallet)
+	e.syncWalletBalances(ctx, dstWallet)
+
 	if tx.Fee.GreaterThan(decimal.Zero) {
+
 		collection := &domain.FeeCollection{
 			ID:            uuid.New().String(),
 			TransactionID: txID,
@@ -213,6 +218,25 @@ func containsStr(s, sub string) bool {
 	return false
 }
 
+func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
+	if w == nil {
+		return
+	}
+	if acct, err := e.stellar.LoadAccount(w.PublicKey); err == nil {
+		for _, b := range acct.Balances {
+			code := b.Code
+			if code == "" {
+				code = "XLM"
+			}
+			amt, err := decimal.NewFromString(b.Balance)
+			if err == nil {
+				_ = e.walletRepo.UpsertBalance(ctx, w.ID, code, b.Issuer, amt)
+			}
+		}
+	}
+}
+
 type horizonTxResp struct{ hash string }
 
 func (r *horizonTxResp) GetHash() string { return r.hash }
+

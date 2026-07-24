@@ -124,6 +124,33 @@ func (r *WalletRepo) UpsertBalance(ctx context.Context, walletID, assetCode, iss
 	return nil
 }
 
+// GetBalances returns all persisted balances for a wallet from DB cache.
+func (r *WalletRepo) GetBalances(ctx context.Context, walletID string) ([]domain.BalanceRecord, error) {
+	rows, err := r.db.Query(ctx,
+		`SELECT wallet_id, asset_code, issuer, balance, updated_at
+		 FROM balances
+		 WHERE wallet_id = $1
+		 ORDER BY asset_code ASC`,
+		walletID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get balances: %w", err)
+	}
+	defer rows.Close()
+
+	var records []domain.BalanceRecord
+	for rows.Next() {
+		var rec domain.BalanceRecord
+		var bal decimal.Decimal
+		if err := rows.Scan(&rec.WalletID, &rec.AssetCode, &rec.Issuer, &bal, &rec.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan balance record: %w", err)
+		}
+		rec.Balance = bal.String()
+		records = append(records, rec)
+	}
+	return records, rows.Err()
+}
+
 // UpdateSyncCursor advances the Horizon paging token used to resume incremental sync.
 func (r *WalletRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor string) error {
 	_, err := r.db.Exec(ctx,
@@ -135,3 +162,4 @@ func (r *WalletRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor stri
 	}
 	return nil
 }
+

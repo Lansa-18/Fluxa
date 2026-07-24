@@ -31,3 +31,16 @@ var (
 	ErrTransferLimitReached    = errors.New("monthly transfer limit reached for account type")
 	ErrWebhookLimitReached     = errors.New("webhook registration limit reached for account type")
 )
+
+type ErrNoTrustline struct {
+	Asset string
+}
+
+func (e *ErrNoTrustline) Error() string {
+	return "Source wallet has no trustline for " + e.Asset
+}
+
+func NewErrNoTrustline(asset string) error {
+	return &ErrNoTrustline{Asset: asset}
+}
+
