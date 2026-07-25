@@ -46,8 +46,15 @@ func InternalError(w http.ResponseWriter, err error) {
 }
 
 func HandleDomainError(w http.ResponseWriter, err error) {
+	var noTrustlineErr *domain.ErrNoTrustline
+	if errors.As(err, &noTrustlineErr) {
+		UnprocessableEntity(w, "MISSING_TRUSTLINE", err.Error())
+		return
+	}
+
 	switch {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
+
 		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
 		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound),
 		errors.Is(err, domain.ErrUserNotFound), errors.Is(err, domain.ErrOrgMemberNotFound),

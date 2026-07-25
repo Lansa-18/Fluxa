@@ -12,3 +12,12 @@ type Wallet struct {
 	// processed for this wallet, used to resume incremental sync.
 	SyncCursor string
 }
+
+type BalanceRecord struct {
+	WalletID  string
+	AssetCode string
+	Issuer    string
+	Balance   string
+	UpdatedAt time.Time
+}
+

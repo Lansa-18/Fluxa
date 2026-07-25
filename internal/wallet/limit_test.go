@@ -30,6 +30,16 @@ func (m *mockRepo) List(ctx context.Context, limit, offset int) ([]*domain.Walle
 func (m *mockRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
 	return m.count, nil
 }
+func (m *mockRepo) UpsertBalance(ctx context.Context, walletID, assetCode, issuer string, balance decimal.Decimal) error {
+	return nil
+}
+func (m *mockRepo) GetBalances(ctx context.Context, walletID string) ([]domain.BalanceRecord, error) {
+	return nil, nil
+}
+func (m *mockRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor string) error {
+	return nil
+}
+
 
 type mockTenantRepo struct {
 	tenant *domain.Tenant

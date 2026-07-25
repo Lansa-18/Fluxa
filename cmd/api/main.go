@@ -103,8 +103,11 @@ func main() {
 	orgSvc := org.NewService(orgRepo, userRepo, tenantRepo, jwtSecretBytes)
 
 	feeSvc := fees.NewService(feeRepo)
-	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey, tenantRepo)
-	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo)
+	walletSvc := wallet.NewService(walletRepo, stellarClient, cfg.MasterEncryptionKey, tenantRepo).
+		WithSigner(signer).
+		WithIssuers(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer)
+	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, queueClient, tenantRepo).
+		WithStellarClient(stellarClient)
 	webhookSvc := webhook.NewService(webhookRepo, queueClient, tenantRepo)
 	batchSvc := batch.NewService(batchRepo, txRepo, transferSvc)
 	scheduleSvc := schedule.NewService(scheduleRepo, walletRepo)
@@ -119,6 +122,8 @@ func main() {
 		feeSvc, stellarClient, redisClient,
 		cfg.StellarUSDCIssuer, []fx.Provider{horizonProvider}, cfg.FXSpreadBps,
 	)
+	walletSvc.WithFXService(fxSvc)
+
 
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
 	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
