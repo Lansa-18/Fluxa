@@ -109,6 +109,10 @@ fluxa/
 - PostgreSQL 15+
 - Redis 7+
 
+The repository root is a Go backend workspace. It does not require root-level
+Node.js, TypeScript, Prisma, or BullMQ tooling to build or run the API and
+worker.
+
 ### 1. Clone and install
 
 ```bash
