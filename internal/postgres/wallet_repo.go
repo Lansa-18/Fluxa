@@ -171,4 +171,3 @@ func (r *WalletRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor stri
 	}
 	return nil
 }
-

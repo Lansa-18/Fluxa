@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fluxa/fluxa/internal/anchor"
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
-	"github.com/fluxa/fluxa/internal/auth"
-	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/org"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
@@ -36,6 +37,8 @@ func New(
 	transferHandler *transfer.Handler,
 	fxHandler *fx.Handler,
 	fiatHandler *fiat.Handler,
+	anchorFiatHandler *fiat.AnchorHandler,
+	anchorHandler *anchor.Handler,
 	feeHandler *fees.Handler,
 	reconcileHandler *reconcile.Handler,
 	apikeyHandler *apikey.Handler,
@@ -97,6 +100,7 @@ func New(
 				r.Route("/wallets/{id}/deposit", fiatHandler.DepositRoutes())
 				r.Route("/wallets/{id}/withdraw", fiatHandler.WithdrawRoutes())
 				r.Route("/webhooks/fiat", fiatHandler.WebhookRoutes())
+				r.Route("/fiat", anchorFiatHandler.Routes())
 				r.Route("/transfers", transferHandler.Routes())
 				r.Route("/transfers/batch", batchHandler.Routes())
 				r.Route("/transactions", transferHandler.TransactionRoutes())
@@ -104,6 +108,7 @@ func New(
 				r.Route("/fx", fxHandler.Routes())
 				r.Route("/fees", feeHandler.Routes())
 				r.Route("/admin/fees", feeHandler.AdminRoutes())
+				r.Route("/admin/anchors", anchorHandler.AdminRoutes())
 				r.Route("/admin", reconcileHandler.AdminRoutes())
 			})
 		})

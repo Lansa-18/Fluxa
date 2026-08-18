@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/anchor"
 	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
@@ -90,6 +91,7 @@ func main() {
 	fxQuoteRepo := postgres.NewFXQuoteRepo(db)
 	batchRepo := postgres.NewBatchRepo(db)
 	scheduleRepo := postgres.NewScheduleRepo(db)
+	anchorRepo := postgres.NewAnchorRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -124,9 +126,14 @@ func main() {
 	)
 	walletSvc.WithFXService(fxSvc)
 
-
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
 	fiatSvc := fiat.NewService(fiatRepo, fwProvider, fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
+
+	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
+	if err := anchorRegistry.Load(ctx); err != nil {
+		log.Fatal().Err(err).Msg("load anchor registry")
+	}
+	anchorFiatSvc := fiat.NewAnchorFiatService(anchorRegistry, anchorRepo, walletRepo, cfg.MasterEncryptionKey, cfg.StellarNetwork)
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
@@ -156,6 +163,8 @@ func main() {
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
 	fiatHandler := fiat.NewHandler(fiatSvc)
+	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
+	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 	webhookHandler := webhook.NewHandler(webhookSvc)
@@ -164,6 +173,7 @@ func main() {
 
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
+		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
 		webhookHandler, batchHandler, scheduleHandler, jwtSecretBytes, cfg.Port,
 	)
