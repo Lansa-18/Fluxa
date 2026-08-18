@@ -30,6 +30,12 @@ var (
 	ErrWalletLimitReached      = errors.New("wallet creation limit reached for account type")
 	ErrTransferLimitReached    = errors.New("monthly transfer limit reached for account type")
 	ErrWebhookLimitReached     = errors.New("webhook registration limit reached for account type")
+
+	ErrOwnerKeyRequired          = errors.New("owner public key is required to create a contract wallet")
+	ErrNotContractWallet         = errors.New("wallet is not a contract wallet")
+	ErrNoContractSigner          = errors.New("no signer configured for contract wallet invocations")
+	ErrContractWasmNotConfigured = errors.New("contract wallet wasm hash is not configured")
+	ErrTrustlineNotApplicable    = errors.New("contract wallets do not use trustlines")
 )
 
 type ErrNoTrustline struct {

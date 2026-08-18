@@ -20,15 +20,24 @@ func NewWalletRepo(db *pgxpool.Pool) *WalletRepo {
 	return &WalletRepo{db: db}
 }
 
+// custodyType defaults wallets persisted by older callers to custodial, matching
+// the column default.
+func custodyType(w *domain.Wallet) domain.CustodyType {
+	if w.CustodyType == "" {
+		return domain.CustodyCustodial
+	}
+	return w.CustodyType
+}
+
 func (r *WalletRepo) Create(ctx context.Context, w *domain.Wallet) error {
 	tID := tenant.IDFromContext(ctx)
 	if tID != "" {
 		w.TenantID = &tID
 	}
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO wallets (id, public_key, encrypted_secret, tenant_id, created_at)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		w.ID, w.PublicKey, w.EncryptedSecret, nullableUUID(w.TenantID), w.CreatedAt,
+		`INSERT INTO wallets (id, public_key, encrypted_secret, tenant_id, created_at, custody_type, contract_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		w.ID, w.PublicKey, w.EncryptedSecret, nullableUUID(w.TenantID), w.CreatedAt, custodyType(w), w.ContractID,
 	)
 	if err != nil {
 		return fmt.Errorf("insert wallet: %w", err)
@@ -40,14 +49,14 @@ func (r *WalletRepo) GetByID(ctx context.Context, id string) (*domain.Wallet, er
 	w := &domain.Wallet{}
 	tID := tenant.IDFromContext(ctx)
 
-	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor FROM wallets WHERE id = $1`
+	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor, custody_type, contract_id FROM wallets WHERE id = $1`
 	args := []interface{}{id}
 	if tID != "" {
 		query += ` AND tenant_id = $2`
 		args = append(args, tID)
 	}
 
-	err := r.db.QueryRow(ctx, query, args...).Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor)
+	err := r.db.QueryRow(ctx, query, args...).Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor, &w.CustodyType, &w.ContractID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrWalletNotFound
@@ -61,14 +70,14 @@ func (r *WalletRepo) GetByPublicKey(ctx context.Context, pubKey string) (*domain
 	w := &domain.Wallet{}
 	tID := tenant.IDFromContext(ctx)
 
-	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor FROM wallets WHERE public_key = $1`
+	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor, custody_type, contract_id FROM wallets WHERE public_key = $1`
 	args := []interface{}{pubKey}
 	if tID != "" {
 		query += ` AND tenant_id = $2`
 		args = append(args, tID)
 	}
 
-	err := r.db.QueryRow(ctx, query, args...).Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor)
+	err := r.db.QueryRow(ctx, query, args...).Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor, &w.CustodyType, &w.ContractID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrWalletNotFound
@@ -81,7 +90,7 @@ func (r *WalletRepo) GetByPublicKey(ctx context.Context, pubKey string) (*domain
 func (r *WalletRepo) List(ctx context.Context, limit, offset int) ([]*domain.Wallet, error) {
 	tID := tenant.IDFromContext(ctx)
 
-	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor FROM wallets`
+	query := `SELECT id, public_key, encrypted_secret, tenant_id, created_at, sync_cursor, custody_type, contract_id FROM wallets`
 	args := []interface{}{}
 	if tID != "" {
 		query += ` WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
@@ -100,7 +109,7 @@ func (r *WalletRepo) List(ctx context.Context, limit, offset int) ([]*domain.Wal
 	var wallets []*domain.Wallet
 	for rows.Next() {
 		w := &domain.Wallet{}
-		if err := rows.Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor); err != nil {
+		if err := rows.Scan(&w.ID, &w.PublicKey, &w.EncryptedSecret, &w.TenantID, &w.CreatedAt, &w.SyncCursor, &w.CustodyType, &w.ContractID); err != nil {
 			return nil, err
 		}
 		wallets = append(wallets, w)
