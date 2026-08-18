@@ -131,7 +131,7 @@ func (s *service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
-	refreshToken, err := GenerateToken(userID, tenantID, domain.RoleOwner, user.Email, "refresh", 7*24*time.Hour)
+	refreshToken, err := GenerateToken(userID, tenantID, domain.RoleOwner, user.Email, "refresh", s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
@@ -174,7 +174,7 @@ func (s *service) Login(ctx context.Context, email, password string) (*AuthRespo
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
-	refreshToken, err := GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", 7*24*time.Hour)
+	refreshToken, err := GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
@@ -214,7 +214,7 @@ func (s *service) RefreshToken(ctx context.Context, refreshTokenStr string) (*Au
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
-	newRefreshToken, err := GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", 7*24*time.Hour)
+	newRefreshToken, err := GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}

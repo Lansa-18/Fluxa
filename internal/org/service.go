@@ -172,7 +172,7 @@ func (s *service) AcceptInvite(ctx context.Context, req AcceptInviteRequest) (*a
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
 
-	refreshToken, err := auth.GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", 7*24*time.Hour)
+	refreshToken, err := auth.GenerateToken(user.ID, t.ID, member.Role, user.Email, "refresh", s.jwtSecret, 7*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
