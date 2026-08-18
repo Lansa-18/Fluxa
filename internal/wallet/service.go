@@ -34,9 +34,16 @@ type Balance struct {
 }
 
 type Service interface {
-	CreateWallet(ctx context.Context) (*domain.Wallet, error)
+	// CreateWallet provisions a wallet. Contract wallets require the owner's
+	// public key; the custodial adapter generates its own keypair and ignores it.
+	CreateWallet(ctx context.Context, ownerPublicKey ...string) (*domain.Wallet, error)
 	GetBalances(ctx context.Context, walletID string, includeFX ...string) ([]Balance, error)
 	AddTrustline(ctx context.Context, walletID, assetCode, issuer, limit string) (string, error)
+	// ExecuteTransfer moves an asset out of the wallet and returns the
+	// transaction hash. Custodial wallets use a classic Stellar payment;
+	// contract wallets invoke execute_payment, which enforces the on-chain
+	// spending limit and time-lock.
+	ExecuteTransfer(ctx context.Context, walletID, destination, assetCode, issuer string, amount decimal.Decimal, memo string) (string, error)
 	WithSigner(signer stellar.Signer) Service
 	WithFXService(fxSvc FXRateGetter) Service
 	WithIssuers(usdcIssuer, eurcIssuer string) Service
@@ -84,7 +91,9 @@ func (s *service) WithIssuers(usdcIssuer, eurcIssuer string) Service {
 	return s
 }
 
-func (s *service) CreateWallet(ctx context.Context) (*domain.Wallet, error) {
+// CreateWallet generates and encrypts a fresh keypair. ownerPublicKey is
+// accepted for interface parity with the contract adapter and ignored here.
+func (s *service) CreateWallet(ctx context.Context, ownerPublicKey ...string) (*domain.Wallet, error) {
 	tenantID := tenant.IDFromContext(ctx)
 	if tenantID != "" && s.tenantRepo != nil {
 		t, err := s.tenantRepo.GetByID(ctx, tenantID)
@@ -111,6 +120,7 @@ func (s *service) CreateWallet(ctx context.Context) (*domain.Wallet, error) {
 		ID:              uuid.New().String(),
 		PublicKey:       pubKey,
 		EncryptedSecret: hex.EncodeToString(encryptedBytes),
+		CustodyType:     domain.CustodyCustodial,
 		CreatedAt:       time.Now().UTC(),
 	}
 
@@ -199,6 +209,92 @@ func (s *service) GetBalances(ctx context.Context, walletID string, includeFX ..
 	return balances, nil
 }
 
+// ExecuteTransfer submits a classic Stellar payment signed with the wallet's
+// stored secret. Custodial wallets carry no on-chain spending policy, so the
+// only limits applied are Stellar's own.
+func (s *service) ExecuteTransfer(
+	ctx context.Context,
+	walletID, destination, assetCode, issuer string,
+	amount decimal.Decimal,
+	memo string,
+) (string, error) {
+	w, err := s.repo.GetByID(ctx, walletID)
+	if err != nil {
+		return "", err
+	}
+
+	asset, err := s.resolveAsset(assetCode, issuer)
+	if err != nil {
+		return "", err
+	}
+
+	acct, err := s.stellar.LoadAccount(w.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("load account: %w", err)
+	}
+
+	txParams := txnbuild.TransactionParams{
+		SourceAccount:        &acct,
+		IncrementSequenceNum: true,
+		Operations: []txnbuild.Operation{&txnbuild.Payment{
+			Destination: destination,
+			Amount:      amount.String(),
+			Asset:       asset,
+		}},
+		BaseFee:       txnbuild.MinBaseFee,
+		Preconditions: txnbuild.Preconditions{TimeBounds: txnbuild.NewTimeout(30)},
+	}
+	if memo != "" {
+		txParams.Memo = txnbuild.MemoText(memo)
+	}
+
+	stellarTx, err := txnbuild.NewTransaction(txParams)
+	if err != nil {
+		return "", fmt.Errorf("build payment transaction: %w", err)
+	}
+
+	signedTx, err := s.sign(stellarTx, w.EncryptedSecret)
+	if err != nil {
+		return "", fmt.Errorf("sign payment transaction: %w", err)
+	}
+
+	resp, err := s.stellar.SubmitTransaction(signedTx)
+	if err != nil {
+		return "", fmt.Errorf("submit payment to stellar: %w", err)
+	}
+
+	return resp.Hash, nil
+}
+
+// resolveAsset fills in a known issuer when the caller omitted one.
+func (s *service) resolveAsset(assetCode, issuer string) (txnbuild.Asset, error) {
+	if assetCode == "XLM" || assetCode == "" {
+		return txnbuild.NativeAsset{}, nil
+	}
+
+	if issuer == "" {
+		if a, ok := s.assetRegistry.Get(assetCode); ok && a.Issuer != "" {
+			issuer = a.Issuer
+		} else if assetCode == "USDC" {
+			issuer = s.usdcIssuer
+		} else if assetCode == "EURC" {
+			issuer = s.eurcIssuer
+		}
+	}
+	if issuer == "" {
+		return nil, fmt.Errorf("%w: missing issuer for asset %s", domain.ErrInvalidAsset, assetCode)
+	}
+
+	return txnbuild.CreditAsset{Code: assetCode, Issuer: issuer}, nil
+}
+
+func (s *service) sign(tx *txnbuild.Transaction, encryptedSecret string) (*txnbuild.Transaction, error) {
+	if s.signer != nil {
+		return s.signer.Sign(tx, encryptedSecret)
+	}
+	return stellar.NewEnvSigner(s.masterKey, "testnet").Sign(tx, encryptedSecret)
+}
+
 func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer, limit string) (string, error) {
 	if assetCode == "XLM" {
 		return "", fmt.Errorf("%w: XLM is native and does not require a trustline", domain.ErrInvalidAsset)
@@ -251,13 +347,7 @@ func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer,
 		return "", fmt.Errorf("build change trust transaction: %w", err)
 	}
 
-	var signedTx *txnbuild.Transaction
-	if s.signer != nil {
-		signedTx, err = s.signer.Sign(stellarTx, w.EncryptedSecret)
-	} else {
-		envSigner := stellar.NewEnvSigner(s.masterKey, "testnet")
-		signedTx, err = envSigner.Sign(stellarTx, w.EncryptedSecret)
-	}
+	signedTx, err := s.sign(stellarTx, w.EncryptedSecret)
 	if err != nil {
 		return "", fmt.Errorf("sign trustline transaction: %w", err)
 	}

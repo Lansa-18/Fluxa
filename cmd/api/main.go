@@ -153,6 +153,29 @@ func main() {
 	authHandler := auth.NewHandler(authSvc)
 	orgHandler := org.NewHandler(orgSvc)
 	walletHandler := wallet.NewHandler(walletSvc)
+
+	// Contract wallets are opt-in: without an installed WASM hash the API keeps
+	// serving custodial wallets only and the contract routes stay unregistered.
+	if cfg.ContractWalletWasmHash != "" {
+		sorobanClient := stellar.NewSorobanClient(cfg.SorobanRPCURL, cfg.StellarNetwork)
+		spendingLimit, err := decimal.NewFromString(cfg.ContractWalletSpendingLimit)
+		if err != nil {
+			log.Fatal().Err(err).Msg("parse CONTRACT_WALLET_SPENDING_LIMIT")
+		}
+		contractSvc := wallet.NewContractWalletAdapter(
+			walletRepo,
+			sorobanClient,
+			wallet.NewSorobanDeployer(sorobanClient, signer, cfg.ContractWalletWasmHash),
+			wallet.NewSACResolver(cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
+			wallet.ContractWalletParams{
+				RecoveryThreshold:     uint32(cfg.ContractWalletRecoveryQuota),
+				SpendingLimit:         spendingLimit,
+				SpendingWindowSeconds: uint64(cfg.ContractWalletWindowSeconds),
+			},
+		).WithTenantRepo(tenantRepo)
+		contractSvc.WithSigner(signer)
+		walletHandler = walletHandler.WithContractService(contractSvc)
+	}
 	transferHandler := transfer.NewHandler(transferSvc)
 	fxHandler := fx.NewHandler(fxSvc)
 	fiatHandler := fiat.NewHandler(fiatSvc)
