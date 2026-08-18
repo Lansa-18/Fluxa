@@ -27,6 +27,11 @@ type Config struct {
 	BalanceDiscrepancyThreshold string
 	JWTSecret                   string
 	FXSpreadBps                 int
+	SorobanRPCURL               string
+	ContractWalletWasmHash      string
+	ContractWalletSpendingLimit string
+	ContractWalletWindowSeconds int
+	ContractWalletRecoveryQuota int
 }
 
 func Load() (*Config, error) {
@@ -39,6 +44,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
 	viper.SetDefault("FX_SPREAD_BPS", "50") // default 0.5%
 	viper.SetDefault("JWT_SECRET", "fluxa-default-jwt-secret-key-change-in-production")
+	viper.SetDefault("SOROBAN_RPC_URL", "https://soroban-testnet.stellar.org")
+	viper.SetDefault("CONTRACT_WALLET_SPENDING_LIMIT", "1000")
+	viper.SetDefault("CONTRACT_WALLET_WINDOW_SECONDS", "86400")
+	viper.SetDefault("CONTRACT_WALLET_RECOVERY_THRESHOLD", "2")
 
 	// Load .env file if present (dev convenience)
 	viper.SetConfigFile(".env")
@@ -81,5 +90,10 @@ func Load() (*Config, error) {
 		BalanceDiscrepancyThreshold: viper.GetString("BALANCE_DISCREPANCY_THRESHOLD"),
 		JWTSecret:                   viper.GetString("JWT_SECRET"),
 		FXSpreadBps:                 viper.GetInt("FX_SPREAD_BPS"),
+		SorobanRPCURL:               viper.GetString("SOROBAN_RPC_URL"),
+		ContractWalletWasmHash:      viper.GetString("CONTRACT_WALLET_WASM_HASH"),
+		ContractWalletSpendingLimit: viper.GetString("CONTRACT_WALLET_SPENDING_LIMIT"),
+		ContractWalletWindowSeconds: viper.GetInt("CONTRACT_WALLET_WINDOW_SECONDS"),
+		ContractWalletRecoveryQuota: viper.GetInt("CONTRACT_WALLET_RECOVERY_THRESHOLD"),
 	}, nil
 }
