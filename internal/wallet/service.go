@@ -9,7 +9,6 @@ import (
 	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/crypto"
 	"github.com/fluxa/fluxa/internal/domain"
-	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/google/uuid"
@@ -23,7 +22,7 @@ type TenantGetter interface {
 }
 
 type FXRateGetter interface {
-	GetRates(ctx context.Context, from, to string) (*fx.RateResponse, error)
+	GetRates(ctx context.Context, from, to string) (*domain.RateResponse, error)
 }
 
 type Balance struct {
@@ -228,7 +227,10 @@ func (s *service) AddTrustline(ctx context.Context, walletID, assetCode, issuer,
 		return "", fmt.Errorf("load account: %w", err)
 	}
 
-	ctAsset := txnbuild.CreditAsset{Code: assetCode, Issuer: issuer}.ToChangeTrustAsset()
+	ctAsset, err := txnbuild.CreditAsset{Code: assetCode, Issuer: issuer}.ToChangeTrustAsset()
+	if err != nil {
+		return "", fmt.Errorf("build change trust asset: %w", err)
+	}
 	if limit == "" {
 		limit = txnbuild.MaxTrustlineLimit
 	}

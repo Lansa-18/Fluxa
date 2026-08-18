@@ -24,6 +24,7 @@ type Config struct {
 	PlatformWalletID            string
 	FlutterwaveSecretKey        string
 	FlutterwaveWebhookHash      string
+	BalanceDiscrepancyThreshold string
 	JWTSecret                   string
 	FXSpreadBps                 int
 }

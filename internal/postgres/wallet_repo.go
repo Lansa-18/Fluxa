@@ -78,6 +78,15 @@ func (r *WalletRepo) GetByPublicKey(ctx context.Context, pubKey string) (*domain
 	return w, nil
 }
 
+func (r *WalletRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM wallets WHERE tenant_id = $1`, tenantID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count wallets by tenant: %w", err)
+	}
+	return count, nil
+}
+
 func (r *WalletRepo) List(ctx context.Context, limit, offset int) ([]*domain.Wallet, error) {
 	tID := tenant.IDFromContext(ctx)
 
