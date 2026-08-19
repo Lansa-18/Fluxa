@@ -48,6 +48,7 @@ func New(
 	scheduleHandler *schedule.Handler,
 	jwtSecret []byte,
 	port string,
+	healthChecks map[string]DependencyCheck,
 ) *Server {
 	r := chi.NewRouter()
 
@@ -56,10 +57,7 @@ func New(
 	r.Use(logger)
 	r.Use(recoverer)
 
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
+	r.Get("/health", HealthHandler(healthChecks))
 
 	r.Route("/v1", func(r chi.Router) {
 		// Unauthenticated public endpoints
