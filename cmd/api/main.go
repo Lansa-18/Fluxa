@@ -199,6 +199,13 @@ func main() {
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
 		webhookHandler, batchHandler, scheduleHandler, jwtSecretBytes, cfg.Port,
+		map[string]server.DependencyCheck{
+			"database": db.Ping,
+			"redis": func(ctx context.Context) error {
+				return redisClient.Ping(ctx).Err()
+			},
+			"stellar": server.HTTPDependencyCheck(cfg.StellarHorizonURL),
+		},
 	)
 
 	quit := make(chan os.Signal, 1)
