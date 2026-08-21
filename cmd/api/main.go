@@ -30,6 +30,7 @@ import (
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -53,7 +54,8 @@ func main() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	if err := postgres.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
 		log.Fatal().Err(err).Msg("run migrations")
@@ -139,10 +141,42 @@ func main() {
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
 		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
 	)
-	_ = engine
+	settlementWorker := settlement.NewWorker(engine)
 
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
-	_ = idx
+	indexerWorker := indexer.NewWorker(idx)
+
+	// Live Horizon SSE stream keeps local state in sync in near real time.
+	// processPayment is idempotent (guarded by ExistsByTxHash), so running
+	// this alongside cmd/worker's own stream is safe, just extra capacity.
+	go func() {
+		if err := idx.StreamAll(ctx, 1000, 0); err != nil {
+			log.Error().Err(err).Msg("indexer: stream all wallets failed")
+		}
+	}()
+
+	redisOpt2, err := asynq.ParseRedisURI(cfg.RedisURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("parse redis uri for asynq")
+	}
+	asynqSrv := asynq.NewServer(redisOpt2, asynq.Config{
+		Concurrency: 5,
+		Queues: map[string]int{
+			"critical": 6,
+			"default":  3,
+			"low":      1,
+		},
+	})
+	asynqMux := asynq.NewServeMux()
+	asynqMux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
+	asynqMux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
+
+	go func() {
+		log.Info().Msg("fluxa api: settlement/indexer asynq consumer starting")
+		if err := asynqSrv.Run(asynqMux); err != nil {
+			log.Error().Err(err).Msg("fluxa api: asynq consumer stopped")
+		}
+	}()
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-api")
 	reconcileSvc := reconcile.NewService(
@@ -214,8 +248,12 @@ func main() {
 	<-quit
 	log.Info().Msg("shutting down")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel() // stop the indexer's live payment stream
+
+	asynqSrv.Shutdown()
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("server shutdown error")
