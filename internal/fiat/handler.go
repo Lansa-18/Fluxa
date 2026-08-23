@@ -8,6 +8,7 @@ import (
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
 
@@ -79,7 +80,8 @@ func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateDeposit(r.Context(), dr)
 	if err != nil {
-		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		log.Error().Err(err).Str("wallet_id", walletID).Msg("initiate deposit failed")
+		api.InternalError(w, err)
 		return
 	}
 
@@ -128,7 +130,8 @@ func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateWithdrawal(r.Context(), wr)
 	if err != nil {
-		api.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		log.Error().Err(err).Str("wallet_id", walletID).Msg("initiate withdrawal failed")
+		api.InternalError(w, err)
 		return
 	}
 
@@ -152,8 +155,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	signature := r.Header.Get("verif-hash")
 
 	if err := h.svc.HandleWebhook(r.Context(), payload, signature); err != nil {
+		log.Error().Err(err).Str("provider", provider).Msg("webhook handling failed")
 		// Do not return 500 so provider won't keep retrying if it's a fatal validation error
-		api.BadRequest(w, err.Error())
+		api.BadRequest(w, "webhook validation failed")
 		return
 	}
 

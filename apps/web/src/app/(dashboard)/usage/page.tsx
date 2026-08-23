@@ -1,112 +1,180 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { api, ApiClientError } from '@/lib/api';
-import { FeeSchedule } from '@/lib/types';
-import { APIKey } from '@/lib/types';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import {
+  api,
+  type FeeSchedule,
+  type FeeCollectedSummary,
+} from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
+import { useToast } from '@/lib/toast-context';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { BarChart3, ArrowRightLeft } from 'lucide-react';
 
 export default function UsagePage() {
-  const [feeSchedule, setFeeSchedule] = useState<FeeSchedule | null>(null);
-  const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { getStoredWalletIds } = useAuth();
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [fees, setFees] = useState<FeeSchedule | null>(null);
+  const [collected, setCollected] = useState<FeeCollectedSummary | null>(null);
+  const [totalTransactions, setTotalTransactions] = useState(0);
+  const [totalVolume, setTotalVolume] = useState(0);
+
+  const walletIds = useMemo(() => getStoredWalletIds(), [getStoredWalletIds]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [feeData, collectedData] = await Promise.all([
+        api.getFeeSchedule().catch(() => null),
+        api.listFeeCollected().catch(() => null),
+      ]);
+      setFees(feeData);
+      setCollected(collectedData);
+
+      let txCount = 0;
+      let vol = 0;
+      for (const id of walletIds) {
+        try {
+          const res = await api.listTransactions(id, 100);
+          const txs = res.transactions || [];
+          txCount += txs.length;
+          vol += txs.reduce((sum, tx) => sum + parseFloat(tx.amount || '0'), 0);
+        } catch {}
+      }
+      setTotalTransactions(txCount);
+      setTotalVolume(vol);
+    } catch {
+      toast('Failed to load usage data', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [walletIds, toast]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true);
-      setError('');
-      try {
-        const [feeData, keysData] = await Promise.all([
-          api.getFeeSchedule().catch(() => null),
-          api.listApiKeys().catch(() => [] as APIKey[]),
-        ]);
-        setFeeSchedule(feeData);
-        setApiKeys(keysData);
-      } catch (err) {
-        if (err instanceof ApiClientError) {
-          setError(err.message);
-        }
-      } finally {
-        setIsLoading(false);
-      }
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await fetchData();
     };
-    fetchData();
-  }, []);
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchData]);
 
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-muted text-lg">Loading usage data...</div>
+      <div className="flex flex-col gap-8">
+        <Skeleton className="h-10 w-56" />
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          <Skeleton className="h-40" />
+          <Skeleton className="h-40" />
+        </div>
+        <Skeleton className="h-48" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-[2rem] font-bold tracking-tight">Usage &amp; Billing</h1>
-        <p className="text-muted text-[1.05rem]">Monitor your API usage and fee schedule.</p>
-      </header>
+    <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <PageHeader
+        title="Usage & Billing"
+        description="Monitor your API usage and limits."
+      />
 
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-500 p-4 rounded-lg text-sm">
-          {error}
-        </div>
-      )}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <ArrowRightLeft className="h-4 w-4" />
+              Total Transactions
+            </CardDescription>
+            <CardTitle className="text-3xl">{totalTransactions}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Across {walletIds.length} wallet(s)
+            </p>
+          </CardContent>
+        </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="glass p-8 flex flex-col gap-4 rounded-2xl">
-          <h3 className="text-xl font-semibold m-0">Active API Keys</h3>
-          <p className="text-4xl font-bold tracking-tight m-0">
-            {apiKeys.filter((k) => !k.revoked_at).length}
-          </p>
-          <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden mt-2 border border-border" />
-          <p className="text-sm text-muted mt-2">{apiKeys.length} total keys created.</p>
-        </div>
-
-        <div className="glass p-8 flex flex-col gap-4 rounded-2xl">
-          <h3 className="text-xl font-semibold m-0">Transfer Fee</h3>
-          <p className="text-4xl font-bold tracking-tight m-0">
-            {feeSchedule ? `${feeSchedule.transfer_fee_bps} bps` : '—'}
-          </p>
-          <div className="w-full h-2 bg-black/20 rounded-full overflow-hidden mt-2 border border-border">
-            {feeSchedule && (
-              <div
-                className="h-full bg-emerald-500 rounded-full"
-                style={{ width: `${Math.min(feeSchedule.transfer_fee_bps, 100)}%` }}
-              />
-            )}
-          </div>
-          <p className="text-sm text-muted mt-2">
-            {feeSchedule
-              ? `Min: ${feeSchedule.min_fee_amount} ${feeSchedule.asset}`
-              : 'No fee data available.'}
-          </p>
-        </div>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <BarChart3 className="h-4 w-4" />
+              Transfer Volume
+            </CardDescription>
+            <CardTitle className="text-3xl">{totalVolume.toFixed(7)}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Total amount transferred</p>
+          </CardContent>
+        </Card>
       </div>
 
-      {feeSchedule && (
-        <div className="glass p-8 flex flex-col gap-6 rounded-2xl">
-          <h3 className="text-xl font-semibold m-0 border-b border-border pb-4">Fee Schedule Details</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div className="flex flex-col gap-1">
-              <span className="text-sm text-muted">Transfer Fee</span>
-              <span className="text-2xl font-bold">{feeSchedule.transfer_fee_bps} bps</span>
+      {fees && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Fee Schedule</CardTitle>
+            <CardDescription>Rates applied to your account.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Transfer Fee
+                </p>
+                <p className="text-2xl font-semibold">
+                  {fees.transfer_fee_bps}{' '}
+                  <span className="text-sm font-normal text-muted-foreground">bps</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Conversion Fee
+                </p>
+                <p className="text-2xl font-semibold">
+                  {fees.conversion_fee_bps}{' '}
+                  <span className="text-sm font-normal text-muted-foreground">bps</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Minimum Fee
+                </p>
+                <p className="text-2xl font-semibold">{fees.min_fee_amount}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Fee Asset
+                </p>
+                <p className="text-2xl font-semibold">{fees.asset}</p>
+              </div>
             </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm text-muted">Conversion Fee</span>
-              <span className="text-2xl font-bold">{feeSchedule.conversion_fee_bps} bps</span>
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm text-muted">Min Fee</span>
-              <span className="text-2xl font-bold">{feeSchedule.min_fee_amount} {feeSchedule.asset}</span>
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm text-muted">Max Fee</span>
-              <span className="text-2xl font-bold">
-                {feeSchedule.max_fee_amount ? `${feeSchedule.max_fee_amount} ${feeSchedule.asset}` : 'None'}
-              </span>
-            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {collected?.collected && collected.collected.length > 0 && (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-lg font-semibold">Collected Fees</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {collected.collected.map((item) => (
+              <Card key={item.asset}>
+                <CardContent className="p-5">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {item.asset}
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold">{item.total_fees}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {item.transfer_count} transfers
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </div>
       )}

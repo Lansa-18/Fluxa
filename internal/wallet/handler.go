@@ -28,6 +28,7 @@ func (h *Handler) WithContractService(contractSvc ContractService) *Handler {
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Post("/", h.createWallet)
+		r.Get("/{id}", h.getWallet)
 		r.Get("/{id}/balances", h.getBalances)
 		r.Post("/{id}/trustlines", h.addTrustline)
 
@@ -59,6 +60,27 @@ type addGuardianRequest struct {
 
 type setTimeLockRequest struct {
 	UntilTimestamp uint64 `json:"untilTimestamp"`
+}
+
+func (h *Handler) getWallet(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	// Use service's repository directly via GetBalances path to avoid exposing secret
+	// For now fetch via balances repo; we need wallet details.
+	// Service doesn't expose GetByID, so we reuse GetBalances with empty FX to validate existence,
+	// then fetch wallet via repo if needed. Simplest: try to load balances and return wallet ID.
+	// Instead, we will ask the service if it can load the wallet by attempting to get balances.
+	// Fallback: return the ID as public_key if not found in stellar.
+	wallet, err := h.svc.GetWalletForHandler(r.Context(), id)
+	if err != nil {
+		api.HandleDomainError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusOK, map[string]interface{}{
+		"id":           wallet.ID,
+		"public_key":   wallet.PublicKey,
+		"custody_type": wallet.CustodyType,
+		"created_at":   wallet.CreatedAt,
+	})
 }
 
 func (h *Handler) createWallet(w http.ResponseWriter, r *http.Request) {

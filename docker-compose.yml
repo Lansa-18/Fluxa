@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fluxa
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: fluxa
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fluxa"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      ENV: development
+      DATABASE_URL: postgresql://fluxa:password@postgres:5432/fluxa?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_USDC_ISSUER: ${STELLAR_USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY}
+      PLATFORM_FEE_WALLET_PUBLIC_KEY: ${PLATFORM_FEE_WALLET_PUBLIC_KEY:-}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      FLUTTERWAVE_SECRET_KEY: ${FLUTTERWAVE_SECRET_KEY:-mock}
+      FLUTTERWAVE_WEBHOOK_HASH: ${FLUTTERWAVE_WEBHOOK_HASH:-mock}
+      ALERT_WEBHOOK_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["./api"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    environment:
+      PORT: "3001"
+      ENV: development
+      DATABASE_URL: postgresql://fluxa:password@postgres:5432/fluxa?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      STELLAR_NETWORK: testnet
+      STELLAR_HORIZON_URL: https://horizon-testnet.stellar.org
+      STELLAR_USDC_ISSUER: ${STELLAR_USDC_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}
+      MASTER_ENCRYPTION_KEY: ${MASTER_ENCRYPTION_KEY}
+      PLATFORM_FEE_WALLET_PUBLIC_KEY: ${PLATFORM_FEE_WALLET_PUBLIC_KEY:-}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      FLUTTERWAVE_SECRET_KEY: ${FLUTTERWAVE_SECRET_KEY:-mock}
+      FLUTTERWAVE_WEBHOOK_HASH: ${FLUTTERWAVE_WEBHOOK_HASH:-mock}
+      ALERT_WEBHOOK_URL: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["./worker"]
+
+volumes:
+  pgdata:
+  redisdata:

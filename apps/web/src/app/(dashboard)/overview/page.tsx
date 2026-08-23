@@ -1,161 +1,276 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { api, ApiClientError } from '@/lib/api';
-import { Transaction, FeeSchedule, Balance } from '@/lib/types';
+import { useEffect, useState, useCallback } from 'react';
+import {
+  api,
+  type HealthResponse,
+  type FeeSchedule,
+  type Transaction,
+  type WalletBalance,
+} from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
+import { useToast } from '@/lib/toast-context';
+import { PageHeader } from '@/components/ui/page-header';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Activity, Wallet, ArrowRightLeft } from 'lucide-react';
 
-interface StoredWallet {
+interface WalletData {
   id: string;
-  public_key: string;
-  created_at: string;
-  balances: Balance[];
+  balances: WalletBalance[];
+}
+
+function statusBadge(status?: string) {
+  if (status === 'ok') return <Badge variant="success">Healthy</Badge>;
+  if (status === 'degraded') return <Badge variant="warning">Degraded</Badge>;
+  return <Badge variant="danger">Down</Badge>;
+}
+
+function txStatusBadge(status: string) {
+  if (status === 'confirmed') return <Badge variant="success">{status}</Badge>;
+  if (status === 'pending') return <Badge variant="warning">{status}</Badge>;
+  return <Badge variant="danger">{status}</Badge>;
 }
 
 export default function OverviewPage() {
-  const [wallets] = useState<StoredWallet[]>(() => {
-    if (typeof window === 'undefined') return [];
-    const stored = localStorage.getItem('fluxa_wallets');
-    return stored ? JSON.parse(stored) : [];
-  });
+  const { getStoredWalletIds } = useAuth();
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [fees, setFees] = useState<FeeSchedule | null>(null);
+  const [wallets, setWallets] = useState<WalletData[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [feeSchedule, setFeeSchedule] = useState<FeeSchedule | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [healthData, feeData] = await Promise.all([
+        api.getHealth().catch(() => null),
+        api.getFeeSchedule().catch(() => null),
+      ]);
+      setHealth(healthData);
+      setFees(feeData);
+
+      const walletIds = getStoredWalletIds();
+      const walletResults = await Promise.all(
+        walletIds.map(async (id) => {
+          try {
+            const res = await api.getWalletBalances(id);
+            return { id, balances: res.balances };
+          } catch {
+            return { id, balances: [] as WalletBalance[] };
+          }
+        })
+      );
+      setWallets(walletResults);
+
+      if (walletIds.length > 0) {
+        try {
+          const txRes = await api.listTransactions(walletIds[0], 10);
+          setTransactions(txRes.transactions || []);
+        } catch {
+          setTransactions([]);
+        }
+      }
+    } catch {
+      toast('Failed to load overview data', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [getStoredWalletIds, toast]);
 
   useEffect(() => {
-    let mounted = true;
-
-    const load = async () => {
-      try {
-        const feeData = await api.getFeeSchedule().catch(() => null);
-        if (mounted) setFeeSchedule(feeData);
-
-        if (wallets.length > 0) {
-          const txData = await api.listTransactions(wallets[0].id, 5);
-          if (mounted) setTransactions(txData.transactions);
-        }
-      } catch (err) {
-        if (mounted && err instanceof ApiClientError) {
-          setError(err.message);
-        }
-      } finally {
-        if (mounted) setIsLoading(false);
-      }
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await fetchData();
     };
-
-    load();
-
-    return () => { mounted = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchData]);
 
   const totalBalance = wallets.reduce((sum, w) => {
-    const balances = w.balances || [];
-    return sum + balances.reduce((s, b) => s + parseFloat(b.balance || '0'), 0);
+    return sum + w.balances.reduce((s, b) => s + parseFloat(b.balance || '0'), 0);
   }, 0);
 
-  const statusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'confirmed':
-        return 'bg-emerald-500/15 text-emerald-500';
-      case 'pending':
-      case 'submitted':
-        return 'bg-amber-500/15 text-amber-500';
-      case 'failed':
-      case 'reconciliation_failed':
-        return 'bg-red-500/15 text-red-500';
-      default:
-        return 'bg-zinc-500/15 text-zinc-400';
-    }
-  };
+  const totalTransferVolume = transactions.reduce((sum, tx) => {
+    return sum + parseFloat(tx.amount || '0');
+  }, 0);
 
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="text-muted text-lg">Loading dashboard...</div>
+      <div className="flex flex-col gap-8">
+        <Skeleton className="h-10 w-64" />
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <Skeleton className="h-40" />
+          <Skeleton className="h-40" />
+          <Skeleton className="h-40" />
+        </div>
+        <Skeleton className="h-64" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <header className="flex flex-col gap-2">
-        <h1 className="text-[2rem] font-bold tracking-tight">Dashboard Overview</h1>
-        <p className="text-muted text-[1.05rem]">Welcome back. Here&apos;s what&apos;s happening today.</p>
-      </header>
+    <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <PageHeader
+        title="Overview"
+        description={
+          health?.status === 'ok'
+            ? 'All systems operational.'
+            : health
+            ? `System status: ${health.status}`
+            : 'Could not reach API'
+        }
+      />
 
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-500 p-4 rounded-lg text-sm">
-          {error}
-        </div>
-      )}
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <Wallet className="h-4 w-4" />
+              Wallets
+            </CardDescription>
+            <CardTitle className="text-3xl">{wallets.length}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {totalBalance > 0
+                ? `${totalBalance.toFixed(7)} total across all assets`
+                : 'No balances loaded'}
+            </p>
+          </CardContent>
+        </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div className="glass p-6 flex flex-col gap-3 rounded-xl transition-all hover:-translate-y-1 hover:shadow-2xl">
-          <h3 className="text-sm font-medium text-muted uppercase tracking-wider">Total Balance</h3>
-          <p className="text-4xl font-bold tracking-tight">
-            {totalBalance > 0 ? totalBalance.toFixed(2) : '0.00'}
-          </p>
-          <p className="text-sm text-muted">{wallets.length} wallet{wallets.length !== 1 ? 's' : ''}</p>
-        </div>
-        <div className="glass p-6 flex flex-col gap-3 rounded-xl transition-all hover:-translate-y-1 hover:shadow-2xl">
-          <h3 className="text-sm font-medium text-muted uppercase tracking-wider">Transfer Fee</h3>
-          <p className="text-4xl font-bold tracking-tight">
-            {feeSchedule ? `${feeSchedule.transfer_fee_bps} bps` : '—'}
-          </p>
-          <p className="text-sm text-muted">
-            {feeSchedule ? `Min: ${feeSchedule.min_fee_amount} ${feeSchedule.asset}` : 'No fee data'}
-          </p>
-        </div>
-        <div className="glass p-6 flex flex-col gap-3 rounded-xl transition-all hover:-translate-y-1 hover:shadow-2xl">
-          <h3 className="text-sm font-medium text-muted uppercase tracking-wider">Conversion Fee</h3>
-          <p className="text-4xl font-bold tracking-tight">
-            {feeSchedule ? `${feeSchedule.conversion_fee_bps} bps` : '—'}
-          </p>
-          <p className="text-sm text-muted">
-            {feeSchedule ? `Asset: ${feeSchedule.asset}` : 'No fee data'}
-          </p>
-        </div>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <ArrowRightLeft className="h-4 w-4" />
+              Transfer Volume
+            </CardDescription>
+            <CardTitle className="text-3xl">
+              {totalTransferVolume > 0 ? totalTransferVolume.toFixed(7) : '0'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Transfer fee: {fees ? `${fees.transfer_fee_bps} bps` : 'N/A'}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              API Health
+            </CardDescription>
+            <CardTitle className="text-3xl">{statusBadge(health?.status)}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {health?.services &&
+                Object.entries(health.services).map(([name, status]) => (
+                  <Badge
+                    key={name}
+                    variant={status === 'up' ? 'success' : 'danger'}
+                  >
+                    {name}: {status}
+                  </Badge>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
+      {fees && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Fee Schedule</CardTitle>
+            <CardDescription>Rates applied to transfers and conversions.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Transfer Fee
+                </p>
+                <p className="text-lg font-semibold">{fees.transfer_fee_bps} bps</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Conversion Fee
+                </p>
+                <p className="text-lg font-semibold">{fees.conversion_fee_bps} bps</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Min Fee
+                </p>
+                <p className="text-lg font-semibold">{fees.min_fee_amount}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Asset
+                </p>
+                <p className="text-lg font-semibold">{fees.asset}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex flex-col gap-4">
-        <h2 className="text-xl font-semibold">Recent Transactions</h2>
-        {transactions.length === 0 ? (
-          <div className="glass p-8 rounded-xl text-center text-muted">
-            {wallets.length > 0
-              ? 'No recent transactions for this wallet.'
-              : 'Create a wallet to start transacting.'}
-          </div>
-        ) : (
-          <div className="glass rounded-xl overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr>
-                  <th className="p-5 border-b border-border font-medium text-muted text-[13px] uppercase tracking-wider">ID</th>
-                  <th className="p-5 border-b border-border font-medium text-muted text-[13px] uppercase tracking-wider">Type</th>
-                  <th className="p-5 border-b border-border font-medium text-muted text-[13px] uppercase tracking-wider">Amount</th>
-                  <th className="p-5 border-b border-border font-medium text-muted text-[13px] uppercase tracking-wider">Status</th>
-                  <th className="p-5 border-b border-border font-medium text-muted text-[13px] uppercase tracking-wider">Date</th>
-                </tr>
-              </thead>
-              <tbody>
+        <h2 className="text-lg font-semibold">Recent Transactions</h2>
+        <Card>
+          {transactions.length === 0 ? (
+            <EmptyState
+              title="No transactions yet"
+              description="Create a wallet and initiate a transfer to get started."
+            />
+          ) : (
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableHeader>ID</TableHeader>
+                  <TableHeader>Type</TableHeader>
+                  <TableHeader>Amount</TableHeader>
+                  <TableHeader>Date</TableHeader>
+                  <TableHeader>Status</TableHeader>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {transactions.map((tx) => (
-                  <tr key={tx.id} className="transition-colors hover:bg-white/5 border-b border-border last:border-0">
-                    <td className="p-5 text-muted text-sm font-mono">{tx.id.slice(0, 8)}...</td>
-                    <td className="p-5 text-sm capitalize">{tx.type}</td>
-                    <td className="p-5 font-medium">{tx.amount} {tx.asset}</td>
-                    <td className="p-5">
-                      <span className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${statusColor(tx.status)}`}>
-                        {tx.status}
-                      </span>
-                    </td>
-                    <td className="p-5 text-muted text-sm">{new Date(tx.created_at).toLocaleDateString()}</td>
-                  </tr>
+                  <TableRow key={tx.id}>
+                    <TableCell className="font-mono text-muted-foreground">
+                      {tx.id.slice(0, 8)}
+                    </TableCell>
+                    <TableCell>{tx.type}</TableCell>
+                    <TableCell className="font-medium">
+                      {tx.amount} {tx.asset}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(tx.created_at).toLocaleString()}
+                    </TableCell>
+                    <TableCell>{txStatusBadge(tx.status)}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </TableBody>
+            </Table>
+          )}
+        </Card>
       </div>
     </div>
   );

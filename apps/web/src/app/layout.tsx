@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AuthProvider } from "@/lib/auth";
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth-context";
+import { ToastProvider } from "@/lib/toast-context";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fluxa — Tenant Dashboard",
-  description: "Fluxa tenant control plane dashboard",
+  title: "Fluxa Tenant",
+  description: "Fluxa payment infrastructure control plane",
 };
 
 export default function RootLayout({
@@ -26,7 +27,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <ToastProvider>
+            {children}
+          </ToastProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -10,6 +10,7 @@ import (
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 )
 
 type Handler struct {
@@ -31,7 +32,7 @@ func (h *Handler) Routes() func(r chi.Router) {
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	tenantID := tenant.IDFromContext(r.Context())
 	if tenantID == "" {
-		http.Error(w, "tenant not found in context", http.StatusUnauthorized)
+		http.Error(w, `{"error":{"code":"UNAUTHORIZED","message":"tenant not found"}}`, http.StatusUnauthorized)
 		return
 	}
 
@@ -42,7 +43,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	raw, prefix, err := Generate()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Msg("generate api key")
+		http.Error(w, `{"error":{"code":"INTERNAL_ERROR","message":"failed to generate key"}}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -56,10 +58,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Create(r.Context(), key); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Str("tenant_id", tenantID).Msg("create api key")
+		http.Error(w, `{"error":{"code":"INTERNAL_ERROR","message":"failed to create key"}}`, http.StatusInternalServerError)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"id":         key.ID,
 		"key":        raw, // raw key exactly once
@@ -72,13 +76,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	tenantID := tenant.IDFromContext(r.Context())
 	if tenantID == "" {
-		http.Error(w, "tenant not found in context", http.StatusUnauthorized)
+		http.Error(w, `{"error":{"code":"UNAUTHORIZED","message":"tenant not found"}}`, http.StatusUnauthorized)
 		return
 	}
 
 	keys, err := h.repo.ListByTenant(r.Context(), tenantID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Str("tenant_id", tenantID).Msg("list api keys")
+		http.Error(w, `{"error":{"code":"INTERNAL_ERROR","message":"failed to list keys"}}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -93,6 +98,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			"created_at":   k.CreatedAt,
 		})
 	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(res)
 }
 
@@ -101,7 +107,8 @@ func (h *Handler) Revoke(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	if err := h.repo.Revoke(r.Context(), id, tenantID); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Str("key_id", id).Msg("revoke api key")
+		http.Error(w, `{"error":{"code":"INTERNAL_ERROR","message":"failed to revoke key"}}`, http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

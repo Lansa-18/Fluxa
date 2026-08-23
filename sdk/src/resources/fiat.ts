@@ -1,0 +1,39 @@
+import { HttpClient } from "../http";
+import {
+  DepositRequest,
+  DepositResponse,
+  WithdrawRequest,
+  WithdrawResponse,
+} from "../types";
+
+export class FiatResource {
+  constructor(private http: HttpClient) {}
+
+  async deposit(
+    walletId: string,
+    request: DepositRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<DepositResponse> {
+    const res = await this.http.request<DepositResponse>({
+      method: "POST",
+      path: `/wallets/${encodeURIComponent(walletId)}/deposit/fiat`,
+      body: request,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+
+  async withdraw(
+    walletId: string,
+    request: WithdrawRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<WithdrawResponse> {
+    const res = await this.http.request<WithdrawResponse>({
+      method: "POST",
+      path: `/wallets/${encodeURIComponent(walletId)}/withdraw/fiat`,
+      body: request,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+}

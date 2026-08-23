@@ -166,6 +166,10 @@ func (a *ContractWalletAdapter) CreateWallet(ctx context.Context, ownerPublicKey
 // Soroban contract holds tokens in contract storage rather than in a classic
 // account, so these come from Fluxa's own records rather than Horizon, and
 // includeFX is not applied.
+func (a *ContractWalletAdapter) GetWalletForHandler(ctx context.Context, walletID string) (*domain.Wallet, error) {
+	return a.repo.GetByID(ctx, walletID)
+}
+
 func (a *ContractWalletAdapter) GetBalances(ctx context.Context, walletID string, includeFX ...string) ([]Balance, error) {
 	if _, err := a.contractWallet(ctx, walletID); err != nil {
 		return nil, err
