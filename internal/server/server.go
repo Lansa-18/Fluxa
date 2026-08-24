@@ -20,6 +20,7 @@ import (
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/go-chi/chi/v5"
@@ -47,6 +48,7 @@ func New(
 	webhookHandler *webhook.Handler,
 	batchHandler *batch.Handler,
 	scheduleHandler *schedule.Handler,
+	treasuryHandler *treasury.Handler,
 	jwtSecret []byte,
 	port string,
 	healthChecks map[string]DependencyCheck,
@@ -125,6 +127,7 @@ func New(
 				r.Route("/admin/fees", feeHandler.AdminRoutes())
 				r.Route("/admin/anchors", anchorHandler.AdminRoutes())
 				r.Route("/admin", reconcileHandler.AdminRoutes())
+				r.Route("/admin/treasury", treasuryHandler.AdminRoutes())
 			})
 		})
 	})

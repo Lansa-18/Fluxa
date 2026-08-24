@@ -142,6 +142,10 @@ func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]op
 	return nil, nil
 }
 
+func (f *fakeStellarClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	return nil, nil
+}
+
 func (f *fakeStellarClient) StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
 	if f.streamPayments != nil {
 		return f.streamPayments(ctx, accountID, cursor, handler)

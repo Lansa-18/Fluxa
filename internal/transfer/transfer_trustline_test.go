@@ -91,6 +91,9 @@ func (m *mockStellarClient) Payments(accountID, cursor string, limit uint) ([]op
 func (m *mockStellarClient) StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
 	return nil
 }
+func (m *mockStellarClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	return nil, nil
+}
 
 type mockFeeRepo struct{}
 
