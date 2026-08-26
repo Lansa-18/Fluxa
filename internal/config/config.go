@@ -71,9 +71,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("MASTER_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got %d bytes", len(keyBytes))
 	}
 
+	env := viper.GetString("ENV")
+	jwtSecret := viper.GetString("JWT_SECRET")
+	if env == "production" {
+		if jwtSecret == "fluxa-default-jwt-secret-key-change-in-production" || len(jwtSecret) < 32 {
+			return nil, fmt.Errorf("a secure, high-entropy JWT_SECRET (min 32 bytes) must be explicitly configured in production")
+		}
+	}
+
 	return &Config{
 		Port:                        viper.GetString("PORT"),
-		Env:                         viper.GetString("ENV"),
+		Env:                         env,
 		DatabaseURL:                 viper.GetString("DATABASE_URL"),
 		RedisURL:                    viper.GetString("REDIS_URL"),
 		StellarNetwork:              viper.GetString("STELLAR_NETWORK"),
