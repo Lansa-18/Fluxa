@@ -53,6 +53,10 @@ func (f *fakeScheduleRepo) ListDue(_ context.Context, now time.Time) ([]*domain.
 	return out, nil
 }
 
+func (f *fakeScheduleRepo) Claim(ctx context.Context, id string, expectedNextRunAt time.Time) (bool, error) {
+	return true, nil
+}
+
 type fakeWalletRepo struct {
 	wallets map[string]*domain.Wallet
 }
@@ -84,6 +88,10 @@ func (f *fakeWalletRepo) GetByPublicKey(_ context.Context, pubKey string) (*doma
 
 func (f *fakeWalletRepo) List(_ context.Context, limit, offset int) ([]*domain.Wallet, error) {
 	return nil, nil
+}
+
+func (f *fakeWalletRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
 }
 
 func (f *fakeWalletRepo) UpsertBalance(_ context.Context, walletID, assetCode, issuer string, balance decimal.Decimal) error {
