@@ -28,14 +28,14 @@ func (r *TransactionRepo) Create(ctx context.Context, tx *domain.Transaction) er
 		tx.TenantID = &tID
 	}
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, created_at, requeue_count, reconciled_at, batch_id, reference)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, created_at, requeue_count, reconciled_at, batch_id, reference, idempotency_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
 		nullableString(tx.FromWallet), nullableString(tx.ToWallet),
 		tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
 		nullableUUID(tx.TenantID), tx.CreatedAt,
 		tx.RequeueCount, nullableTime(tx.ReconciledAt),
-		nullableUUID(tx.BatchID), nullableString(tx.Reference),
+		nullableUUID(tx.BatchID), nullableString(tx.Reference), nullableString(tx.IdempotencyKey),
 	)
 	if err != nil {
 		return fmt.Errorf("insert transaction: %w", err)
@@ -96,6 +96,50 @@ func (r *TransactionRepo) GetByID(ctx context.Context, id string) (*domain.Trans
 	tx.TenantID = tenantID
 	tx.BatchID = batchID
 	tx.Reference = reference
+	return tx, nil
+}
+
+// GetByIdempotencyKey returns the transaction previously created for this
+// org/idempotency-key pair, used by the transfer service to guarantee
+// exactly-once transfer creation for a given key.
+func (r *TransactionRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
+	tx := &domain.Transaction{}
+	var amount, fee string
+	var feeBps *int
+	var tenantID *string
+	var batchID *string
+	var reference string
+
+	query := `SELECT id, COALESCE(tx_hash,''), type, status,
+		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),
+		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
+		        COALESCE(requeue_count, 0), reconciled_at, batch_id, COALESCE(reference,'')
+		 FROM transactions WHERE idempotency_key = $1`
+	args := []interface{}{idempotencyKey}
+	if orgID != "" {
+		query += ` AND tenant_id = $2`
+		args = append(args, orgID)
+	}
+
+	err := r.db.QueryRow(ctx, query, args...).Scan(&tx.ID, &tx.TxHash, &tx.Type, &tx.Status,
+		&tx.FromWallet, &tx.ToWallet,
+		&tx.Asset, &amount, &fee, &feeBps, &tenantID, &tx.CreatedAt,
+		&tx.RequeueCount, &tx.ReconciledAt, &batchID, &reference)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrTransactionNotFound
+		}
+		return nil, fmt.Errorf("get transaction by idempotency key: %w", err)
+	}
+	tx.Amount, _ = decimal.NewFromString(amount)
+	tx.Fee, _ = decimal.NewFromString(fee)
+	if feeBps != nil {
+		tx.FeeBps = *feeBps
+	}
+	tx.TenantID = tenantID
+	tx.BatchID = batchID
+	tx.Reference = reference
+	tx.IdempotencyKey = idempotencyKey
 	return tx, nil
 }
 
@@ -525,4 +569,3 @@ func (r *TransactionRepo) CountMonthlyTransfersByTenant(ctx context.Context, ten
 	}
 	return count, nil
 }
-

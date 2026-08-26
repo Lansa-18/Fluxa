@@ -8,6 +8,7 @@ const (
 	TypeBalanceReconcile = "reconcile:balance"
 	TypeWebhookDeliver   = "webhook:deliver"
 	TypeRunSchedules     = "schedule:run"
+	TypeTreasurySweep    = "treasury:sweep"
 )
 
 type ProcessTransferPayload struct {

@@ -122,6 +122,9 @@ func (m *fullMockStellar) Payments(accountID, cursor string, limit uint) ([]oper
 func (m *fullMockStellar) StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
 	return nil
 }
+func (m *fullMockStellar) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	return nil, nil
+}
 
 type mockFXService struct{}
 

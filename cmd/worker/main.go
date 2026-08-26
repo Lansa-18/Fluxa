@@ -18,6 +18,7 @@ import (
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
@@ -55,6 +56,7 @@ func main() {
 	webhookRepo := postgres.NewWebhookRepo(db)
 	reconcileRepo := postgres.NewReconcileRepo(db)
 	scheduleRepo := postgres.NewScheduleRepo(db)
+	treasuryRepo := postgres.NewTreasuryRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -84,6 +86,13 @@ func main() {
 
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
+
+	treasurySvc := treasury.NewService(
+		treasuryRepo, stellarClient, nil, webhookSvc,
+		cfg.PlatformFeeWalletPublicKey, cfg.StellarNetwork, cfg.TreasurySecretKey,
+		cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer,
+	)
+	treasuryWorker := treasury.NewWorker(treasurySvc)
 
 	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
 	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
@@ -127,6 +136,7 @@ func main() {
 	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
 	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
+	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 
@@ -155,6 +165,14 @@ func main() {
 	scheduleTask := asynq.NewTask(queue.TypeRunSchedules, nil)
 	if _, err := scheduler.Register("@every 1m", scheduleTask); err != nil {
 		log.Fatal().Err(err).Msg("register schedule run scheduler")
+	}
+
+	// Treasury sweep runs once a day; assets with auto_sweep_enabled = false
+	// are skipped by the worker itself, so disabling sweeping is effective
+	// immediately without touching this schedule.
+	treasurySweepTask := asynq.NewTask(queue.TypeTreasurySweep, nil, asynq.Queue("low"))
+	if _, err := scheduler.Register("@daily", treasurySweepTask); err != nil {
+		log.Fatal().Err(err).Msg("register treasury sweep scheduler")
 	}
 
 	quit := make(chan os.Signal, 1)
