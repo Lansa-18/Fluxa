@@ -137,13 +137,21 @@ func (r *AnchorRepo) CreateTransaction(ctx context.Context, t *domain.AnchorTran
 	return nil
 }
 
-func (r *AnchorRepo) GetTransactionByID(ctx context.Context, id string) (*domain.AnchorTransaction, error) {
+func (r *AnchorRepo) GetTransactionByID(ctx context.Context, id string, tenantID *string) (*domain.AnchorTransaction, error) {
 	query := `
-		SELECT id, user_id, wallet_id, anchor_id, external_tx_id, asset, amount, type, status, created_at, completed_at
-		FROM anchor_transactions WHERE id = $1
+		SELECT t.id, t.user_id, t.wallet_id, t.anchor_id, t.external_tx_id, t.asset, t.amount, t.type, t.status, t.created_at, t.completed_at
+		FROM anchor_transactions t
 	`
+	args := []interface{}{id}
+	if tenantID != nil {
+		query += ` JOIN wallets w ON w.id = t.wallet_id WHERE t.id = $1 AND w.tenant_id = $2`
+		args = append(args, *tenantID)
+	} else {
+		query += ` WHERE t.id = $1`
+	}
+
 	var t domain.AnchorTransaction
-	err := r.db.QueryRow(ctx, query, id).Scan(
+	err := r.db.QueryRow(ctx, query, args...).Scan(
 		&t.ID, &t.UserID, &t.WalletID, &t.AnchorID, &t.ExternalTxID,
 		&t.Asset, &t.Amount, &t.Type, &t.Status, &t.CreatedAt, &t.CompletedAt,
 	)
@@ -156,9 +164,18 @@ func (r *AnchorRepo) GetTransactionByID(ctx context.Context, id string) (*domain
 	return &t, nil
 }
 
-func (r *AnchorRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time) error {
+func (r *AnchorRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time, tenantID *string) error {
 	query := `UPDATE anchor_transactions SET status = $1, completed_at = $2 WHERE id = $3`
-	_, err := r.db.Exec(ctx, query, status, completedAt, id)
+	args := []interface{}{status, completedAt, id}
+
+	if tenantID != nil {
+		// Need to enforce tenant ownership during update. 
+		// Since we cannot easily join in an UPDATE without FROM, we can use a subquery in WHERE.
+		query += ` AND wallet_id IN (SELECT id FROM wallets WHERE tenant_id = $4)`
+		args = append(args, *tenantID)
+	}
+
+	_, err := r.db.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update anchor transaction status: %w", err)
 	}

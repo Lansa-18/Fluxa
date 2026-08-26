@@ -10,6 +10,7 @@ import (
 	"github.com/fluxa/fluxa/internal/anchor"
 	"github.com/fluxa/fluxa/internal/crypto"
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/google/uuid"
 )
 
@@ -24,8 +25,8 @@ type WalletGetter interface {
 // Fluxa's own record of deposits/withdrawals initiated against anchors.
 type AnchorRepository interface {
 	CreateTransaction(ctx context.Context, t *domain.AnchorTransaction) error
-	GetTransactionByID(ctx context.Context, id string) (*domain.AnchorTransaction, error)
-	UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time) error
+	GetTransactionByID(ctx context.Context, id string, tenantID *string) (*domain.AnchorTransaction, error)
+	UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time, tenantID *string) error
 }
 
 // AnchorRegistry is the slice of anchor.Registry the fiat service needs to
@@ -194,7 +195,13 @@ func (s *AnchorFiatService) InitiateWithdrawal(ctx context.Context, req AnchorWi
 // updates Fluxa's own record if it changed, and returns the normalised
 // record (whose Status mirrors the anchor's SEP-6/24 status verbatim).
 func (s *AnchorFiatService) GetTransaction(ctx context.Context, id string) (*domain.AnchorTransaction, error) {
-	record, err := s.repo.GetTransactionByID(ctx, id)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+
+	record, err := s.repo.GetTransactionByID(ctx, id, tenantPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +240,7 @@ func (s *AnchorFiatService) GetTransaction(ctx context.Context, id string) (*dom
 			now := time.Now().UTC()
 			completedAt = &now
 		}
-		if err := s.repo.UpdateTransactionStatus(ctx, record.ID, remote.Status, completedAt); err != nil {
+		if err := s.repo.UpdateTransactionStatus(ctx, record.ID, remote.Status, completedAt, tenantPtr); err != nil {
 			return nil, fmt.Errorf("update transaction status: %w", err)
 		}
 		record.Status = remote.Status
