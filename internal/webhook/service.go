@@ -23,12 +23,12 @@ type Repository interface {
 	Create(ctx context.Context, ep *domain.WebhookEndpoint) error
 	GetByID(ctx context.Context, id string) (*domain.WebhookEndpoint, error)
 	List(ctx context.Context, tenantID *string) ([]*domain.WebhookEndpoint, error)
-	Delete(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string, tenantID *string) error
 	ListActiveByEvent(ctx context.Context, eventType string) ([]*domain.WebhookEndpoint, error)
 	CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error
 	UpdateDelivery(ctx context.Context, d *domain.WebhookDelivery) error
-	GetDeliveryByID(ctx context.Context, id string) (*domain.WebhookDelivery, error)
-	ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error)
+	GetDeliveryByID(ctx context.Context, id string, tenantID *string) (*domain.WebhookDelivery, error)
+	ListDeliveries(ctx context.Context, endpointID string, limit, offset int, tenantID *string) ([]*domain.WebhookDelivery, error)
 	CountByTenant(ctx context.Context, tenantID string) (int, error)
 }
 
@@ -119,14 +119,24 @@ func (s *service) List(ctx context.Context) ([]*domain.WebhookEndpoint, error) {
 }
 
 func (s *service) Delete(ctx context.Context, id string) error {
-	return s.repo.Delete(ctx, id)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	return s.repo.Delete(ctx, id, tenantPtr)
 }
 
 func (s *service) ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	return s.repo.ListDeliveries(ctx, endpointID, limit, offset)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	return s.repo.ListDeliveries(ctx, endpointID, limit, offset, tenantPtr)
 }
 
 // Dispatch creates delivery records for all active endpoints subscribed to eventType,
@@ -213,7 +223,12 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 }
 
 func (s *service) loadDelivery(ctx context.Context, deliveryID string) (*domain.WebhookDelivery, *domain.WebhookEndpoint, error) {
-	delivery, err := s.repo.GetDeliveryByID(ctx, deliveryID)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	delivery, err := s.repo.GetDeliveryByID(ctx, deliveryID, tenantPtr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load delivery: %w", err)
 	}
