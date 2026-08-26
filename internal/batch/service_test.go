@@ -71,8 +71,8 @@ func (f *fakeTxRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, err
 	return false, nil
 }
 
-func (f *fakeTxRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
-	return nil, domain.ErrTransactionNotFound
+func (f *fakeTxRepo) CountMonthlyTransfersByTenant(ctx context.Context, tenantID string, year int, month time.Month) (int, error) {
+	return 0, nil
 }
 
 // fakeTransferSvc implements transfer.Service. It simulates the settlement

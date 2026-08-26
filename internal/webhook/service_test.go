@@ -45,6 +45,10 @@ func (m *mockRepo) List(_ context.Context, _ *string) ([]*domain.WebhookEndpoint
 	return out, nil
 }
 
+func (m *mockRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockRepo) Delete(_ context.Context, id string) error {
 	if _, ok := m.endpoints[id]; !ok {
 		return domain.ErrWebhookNotFound

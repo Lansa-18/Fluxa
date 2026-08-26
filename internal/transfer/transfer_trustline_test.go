@@ -101,7 +101,7 @@ func (m *mockStellarClient) Offers(accountID string, limit uint) ([]horizon.Offe
 type mockFeeRepo struct{}
 
 func (m *mockFeeRepo) GetSchedule(ctx context.Context, tenantID *string, asset string) (*domain.FeeSchedule, error) {
-	return &domain.FeeSchedule{FeeBps: 10}, nil
+	return &domain.FeeSchedule{TransferFeeBps: 10}, nil
 }
 func (m *mockFeeRepo) CreateSchedule(ctx context.Context, fs *domain.FeeSchedule) error {
 	return nil

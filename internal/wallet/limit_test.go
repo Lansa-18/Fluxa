@@ -8,6 +8,7 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/fluxa/fluxa/internal/wallet"
+	"github.com/shopspring/decimal"
 )
 
 type mockRepo struct {

@@ -86,6 +86,10 @@ func (f *fakeWalletRepo) List(_ context.Context, limit, offset int) ([]*domain.W
 	return nil, nil
 }
 
+func (f *fakeWalletRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
 func (f *fakeWalletRepo) UpsertBalance(_ context.Context, walletID, assetCode, issuer string, balance decimal.Decimal) error {
 	return nil
 }
