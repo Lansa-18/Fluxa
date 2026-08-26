@@ -11,6 +11,7 @@ import (
 type Handler struct {
 	svc         Service
 	contractSvc ContractService
+	idem        func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
@@ -25,12 +26,23 @@ func (h *Handler) WithContractService(contractSvc ContractService) *Handler {
 	return h
 }
 
+// WithIdempotency attaches the idempotency-key middleware to the
+// state-mutating routes (POST / and POST /{id}/trustlines) only.
+func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
+	h.idem = mw
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.createWallet)
+		post := r.Post
+		if h.idem != nil {
+			post = r.With(h.idem).Post
+		}
+		post("/", h.createWallet)
 		r.Get("/{id}", h.getWallet)
 		r.Get("/{id}/balances", h.getBalances)
-		r.Post("/{id}/trustlines", h.addTrustline)
+		post("/{id}/trustlines", h.addTrustline)
 
 		if h.contractSvc != nil {
 			r.Get("/{id}/contract-state", h.getContractState)

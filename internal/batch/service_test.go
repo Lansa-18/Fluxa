@@ -71,6 +71,10 @@ func (f *fakeTxRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, err
 	return false, nil
 }
 
+func (f *fakeTxRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
+}
+
 // fakeTransferSvc implements transfer.Service. It simulates the settlement
 // worker having already confirmed each transfer synchronously, except for
 // destinations listed in failOn, which behave like a submission failure.
@@ -82,6 +86,10 @@ type fakeTransferSvc struct {
 
 func (f *fakeTransferSvc) InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error) {
 	return f.InitiateBatchTransfer(ctx, fromID, toID, asset, amount, "", "")
+}
+
+func (f *fakeTransferSvc) InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error) {
+	return f.InitiateTransfer(ctx, fromID, toID, asset, amount)
 }
 
 func (f *fakeTransferSvc) InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {

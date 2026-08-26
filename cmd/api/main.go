@@ -25,6 +25,7 @@ import (
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/server"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
@@ -94,6 +95,8 @@ func main() {
 	batchRepo := postgres.NewBatchRepo(db)
 	scheduleRepo := postgres.NewScheduleRepo(db)
 	anchorRepo := postgres.NewAnchorRepo(db)
+	idempotencyRepo := postgres.NewIdempotencyRepo(db)
+	idemMW := idempotency.Middleware(idempotencyRepo)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -193,7 +196,7 @@ func main() {
 
 	authHandler := auth.NewHandler(authSvc)
 	orgHandler := org.NewHandler(orgSvc)
-	walletHandler := wallet.NewHandler(walletSvc)
+	walletHandler := wallet.NewHandler(walletSvc).WithIdempotency(idemMW)
 
 	// Contract wallets are opt-in: without an installed WASM hash the API keeps
 	// serving custodial wallets only and the contract routes stay unregistered.
@@ -217,15 +220,15 @@ func main() {
 		contractSvc.WithSigner(signer)
 		walletHandler = walletHandler.WithContractService(contractSvc)
 	}
-	transferHandler := transfer.NewHandler(transferSvc)
-	fxHandler := fx.NewHandler(fxSvc)
+	transferHandler := transfer.NewHandler(transferSvc).WithIdempotency(idemMW)
+	fxHandler := fx.NewHandler(fxSvc).WithIdempotency(idemMW)
 	fiatHandler := fiat.NewHandler(fiatSvc)
 	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 	webhookHandler := webhook.NewHandler(webhookSvc)
-	batchHandler := batch.NewHandler(batchSvc)
+	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
 
 	srv := server.New(
