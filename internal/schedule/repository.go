@@ -15,4 +15,5 @@ type Repository interface {
 	// ListDue returns active schedules whose next_run_at has elapsed. Called
 	// by the background worker with an unscoped context, so it spans tenants.
 	ListDue(ctx context.Context, now time.Time) ([]*domain.Schedule, error)
+	Claim(ctx context.Context, id string, expectedNextRunAt time.Time) (bool, error)
 }

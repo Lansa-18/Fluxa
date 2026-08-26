@@ -14,10 +14,12 @@ const (
 	FrequencyWeekly  ScheduleFrequency = "weekly"
 	FrequencyMonthly ScheduleFrequency = "monthly"
 
-	ScheduleStatusActive    ScheduleStatus = "active"
-	ScheduleStatusPaused    ScheduleStatus = "paused"
-	ScheduleStatusCancelled ScheduleStatus = "cancelled"
-	ScheduleStatusCompleted ScheduleStatus = "completed"
+	ScheduleStatusActive     ScheduleStatus = "active"
+	ScheduleStatusProcessing ScheduleStatus = "processing"
+	ScheduleStatusFailed     ScheduleStatus = "failed"
+	ScheduleStatusPaused     ScheduleStatus = "paused"
+	ScheduleStatusCancelled  ScheduleStatus = "cancelled"
+	ScheduleStatusCompleted  ScheduleStatus = "completed"
 )
 
 type Schedule struct {

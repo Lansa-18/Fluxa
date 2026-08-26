@@ -53,6 +53,10 @@ func (f *fakeScheduleRepo) ListDue(_ context.Context, now time.Time) ([]*domain.
 	return out, nil
 }
 
+func (f *fakeScheduleRepo) Claim(ctx context.Context, id string, expectedNextRunAt time.Time) (bool, error) {
+	return true, nil
+}
+
 type fakeWalletRepo struct {
 	wallets map[string]*domain.Wallet
 }

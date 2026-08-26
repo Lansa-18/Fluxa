@@ -142,3 +142,14 @@ func scanSchedule(row rowScanner) (*domain.Schedule, error) {
 	s.Amount, _ = decimal.NewFromString(amount)
 	return s, nil
 }
+
+func (r *ScheduleRepo) Claim(ctx context.Context, id string, expectedNextRunAt time.Time) (bool, error) {
+	query := `UPDATE schedules SET status = $1, updated_at = $2 WHERE id = $3 AND status = $4 AND next_run_at = $5`
+	
+	tag, err := r.db.Exec(ctx, query, domain.ScheduleStatusProcessing, time.Now().UTC(), id, domain.ScheduleStatusActive, expectedNextRunAt)
+	if err != nil {
+		return false, fmt.Errorf("claim schedule: %w", err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}
