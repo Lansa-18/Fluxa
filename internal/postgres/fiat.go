@@ -33,9 +33,15 @@ func (r *FiatRepo) CreateDeposit(ctx context.Context, d *domain.FiatDeposit) err
 }
 
 func (r *FiatRepo) UpdateDepositStatus(ctx context.Context, id, status string) error {
-	query := `UPDATE fiat_deposits SET status = $1 WHERE id = $2`
-	_, err := r.db.Exec(ctx, query, status, id)
-	return err
+	query := `UPDATE fiat_deposits SET status = $1 WHERE id = $2 AND status = 'pending'`
+	tag, err := r.db.Exec(ctx, query, status, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("deposit %s already processed or not pending", id)
+	}
+	return nil
 }
 
 func (r *FiatRepo) GetDepositByReference(ctx context.Context, ref string) (*domain.FiatDeposit, error) {
@@ -73,9 +79,15 @@ func (r *FiatRepo) CreateWithdrawal(ctx context.Context, w *domain.FiatWithdrawa
 }
 
 func (r *FiatRepo) UpdateWithdrawalStatus(ctx context.Context, id, status string) error {
-	query := `UPDATE fiat_withdrawals SET status = $1 WHERE id = $2`
-	_, err := r.db.Exec(ctx, query, status, id)
-	return err
+	query := `UPDATE fiat_withdrawals SET status = $1 WHERE id = $2 AND status = 'pending'`
+	tag, err := r.db.Exec(ctx, query, status, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("withdrawal %s already processed or not pending", id)
+	}
+	return nil
 }
 
 func (r *FiatRepo) GetWithdrawalByReference(ctx context.Context, ref string) (*domain.FiatWithdrawal, error) {

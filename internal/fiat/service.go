@@ -155,10 +155,16 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 				return fmt.Errorf("credit user wallet: %w", err)
 			}
 			if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusCompleted); err != nil {
+				if err.Error() == fmt.Sprintf("deposit %s already processed or not pending", deposit.ID) {
+					return nil
+				}
 				return fmt.Errorf("update deposit status: %w", err)
 			}
 		} else if evt.Status == "failed" {
 			if err := s.repo.UpdateDepositStatus(ctx, deposit.ID, domain.FiatStatusFailed); err != nil {
+				if err.Error() == fmt.Sprintf("deposit %s already processed or not pending", deposit.ID) {
+					return nil
+				}
 				return fmt.Errorf("update deposit status: %w", err)
 			}
 		}
@@ -175,12 +181,22 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 
 		if evt.Status == "completed" {
 			if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusCompleted); err != nil {
+				if err.Error() == fmt.Sprintf("withdrawal %s already processed or not pending", withdrawal.ID) {
+					return nil
+				}
 				return fmt.Errorf("update withdrawal status: %w", err)
 			}
 		} else if evt.Status == "failed" {
-			// We might need to refund the user here. For now just mark failed.
 			if err := s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed); err != nil {
+				if err.Error() == fmt.Sprintf("withdrawal %s already processed or not pending", withdrawal.ID) {
+					return nil
+				}
 				return fmt.Errorf("update withdrawal status: %w", err)
+			}
+			// Refund the user for failed withdrawal
+			_, refundErr := s.transferSvc.InitiateTransfer(ctx, s.platformWalletID, withdrawal.WalletID, "USDC", withdrawal.USDCAmount)
+			if refundErr != nil {
+				return fmt.Errorf("refund user wallet for failed withdrawal: %w", refundErr)
 			}
 		}
 	}
