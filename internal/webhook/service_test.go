@@ -105,6 +105,16 @@ func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int
 	return out, nil
 }
 
+func (m *mockRepo) CountByTenant(_ context.Context, tenantID string) (int, error) {
+	count := 0
+	for _, ep := range m.endpoints {
+		if ep.TenantID != nil && *ep.TenantID == tenantID {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func TestRegister(t *testing.T) {
 	repo := newMockRepo()
 	svc := NewService(repo, nil)
@@ -148,7 +158,8 @@ func TestDispatchAndDeliver(t *testing.T) {
 	defer ts.Close()
 
 	repo := newMockRepo()
-	svc := NewService(repo, nil)
+	svc := NewService(repo, nil).(*service)
+	svc.allowPrivateNetworks = true // ts.URL is a loopback httptest server
 
 	// Register endpoint subscribed to all events.
 	ep, _ := svc.Register(context.Background(), ts.URL, []string{})

@@ -51,14 +51,19 @@ type service struct {
 	queue      *queue.Client
 	client     *http.Client
 	tenantRepo TenantGetter
+
+	// allowPrivateNetworks disables SSRF destination checks. It only exists
+	// so tests can target httptest servers on loopback addresses; it must
+	// never be set outside of tests and NewService never sets it.
+	allowPrivateNetworks bool
 }
 
 func NewService(repo Repository, q *queue.Client, tenantRepo ...TenantGetter) Service {
 	s := &service{
-		repo:   repo,
-		queue:  q,
-		client: &http.Client{Timeout: 10 * time.Second},
+		repo:  repo,
+		queue: q,
 	}
+	s.client = s.newSafeHTTPClient()
 	if len(tenantRepo) > 0 {
 		s.tenantRepo = tenantRepo[0]
 	}
@@ -66,6 +71,10 @@ func NewService(repo Repository, q *queue.Client, tenantRepo ...TenantGetter) Se
 }
 
 func (s *service) Register(ctx context.Context, url string, events []string) (*domain.WebhookEndpoint, error) {
+	if err := s.validateWebhookURL(ctx, url); err != nil {
+		return nil, err
+	}
+
 	tenantID := tenant.IDFromContext(ctx)
 	var tenantPtr *string
 	if tenantID != "" {
@@ -187,6 +196,12 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	now := time.Now().UTC()
 	delivery.AttemptCount++
 	delivery.LastAttempt = &now
+
+	if err := s.validateWebhookURL(ctx, ep.URL); err != nil {
+		delivery.Status = domain.DeliveryFailed
+		_ = s.repo.UpdateDelivery(ctx, delivery)
+		return fmt.Errorf("validate webhook destination: %w", err)
+	}
 
 	sig := sign(ep.Secret, delivery.Payload)
 
