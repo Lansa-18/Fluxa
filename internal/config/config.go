@@ -19,6 +19,7 @@ type Config struct {
 	MasterEncryptionKey         []byte
 	TreasurySecretKey           string
 	PlatformFeeWalletPublicKey  string
+	ColdStorageAddress          string
 	MigrationsPath              string
 	AlertWebhookURL             string
 	PlatformWalletID            string
@@ -82,6 +83,7 @@ func Load() (*Config, error) {
 		MasterEncryptionKey:         keyBytes,
 		TreasurySecretKey:           viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey:  viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),
+		ColdStorageAddress:          viper.GetString("COLD_STORAGE_ADDRESS"),
 		MigrationsPath:              viper.GetString("MIGRATIONS_PATH"),
 		AlertWebhookURL:             viper.GetString("ALERT_WEBHOOK_URL"),
 		PlatformWalletID:            viper.GetString("PLATFORM_WALLET_ID"),

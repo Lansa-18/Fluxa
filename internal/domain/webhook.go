@@ -5,29 +5,30 @@ import "time"
 type EventType string
 
 const (
-	EventTransferInitiated   EventType = "transfer.initiated"
-	EventTransferSettled     EventType = "transfer.settled"
-	EventTransferFailed      EventType = "transfer.failed"
-	EventWalletFunded        EventType = "wallet.funded"
-	EventConversionCompleted EventType = "conversion.completed"
+	EventTransferInitiated      EventType = "transfer.initiated"
+	EventTransferSettled        EventType = "transfer.settled"
+	EventTransferFailed         EventType = "transfer.failed"
+	EventWalletFunded           EventType = "wallet.funded"
+	EventConversionCompleted    EventType = "conversion.completed"
+	EventTreasurySweepCompleted EventType = "treasury.sweep_completed"
 )
 
 type DeliveryStatus string
 
 const (
-	DeliveryPending   DeliveryStatus = "pending"
-	DeliverySuccess   DeliveryStatus = "success"
-	DeliveryFailed    DeliveryStatus = "failed"
+	DeliveryPending DeliveryStatus = "pending"
+	DeliverySuccess DeliveryStatus = "success"
+	DeliveryFailed  DeliveryStatus = "failed"
 )
 
 type WebhookEndpoint struct {
-	ID         string
-	TenantID   *string
-	URL        string
-	Secret     string    // HMAC signing secret
-	Events     []string  // subscribed event types; empty = all
-	Active     bool
-	CreatedAt  time.Time
+	ID        string
+	TenantID  *string
+	URL       string
+	Secret    string   // HMAC signing secret
+	Events    []string // subscribed event types; empty = all
+	Active    bool
+	CreatedAt time.Time
 }
 
 type WebhookDelivery struct {

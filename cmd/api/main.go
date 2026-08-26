@@ -14,6 +14,7 @@ import (
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/config"
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
@@ -29,6 +30,7 @@ import (
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
@@ -95,6 +97,7 @@ func main() {
 	batchRepo := postgres.NewBatchRepo(db)
 	scheduleRepo := postgres.NewScheduleRepo(db)
 	anchorRepo := postgres.NewAnchorRepo(db)
+	treasuryRepo := postgres.NewTreasuryRepo(db)
 	idempotencyRepo := postgres.NewIdempotencyRepo(db)
 	idemMW := idempotency.Middleware(idempotencyRepo)
 
@@ -139,6 +142,12 @@ func main() {
 		log.Fatal().Err(err).Msg("load anchor registry")
 	}
 	anchorFiatSvc := fiat.NewAnchorFiatService(anchorRegistry, anchorRepo, walletRepo, cfg.MasterEncryptionKey, cfg.StellarNetwork)
+
+	treasurySvc := treasury.NewService(
+		treasuryRepo, stellarClient, fxSvc, webhookSvc,
+		cfg.PlatformFeeWalletPublicKey, cfg.StellarNetwork, cfg.TreasurySecretKey,
+		cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer,
+	)
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
@@ -230,12 +239,13 @@ func main() {
 	webhookHandler := webhook.NewHandler(webhookSvc)
 	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
+	treasuryHandler := treasury.NewHandler(treasurySvc).WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, batchHandler, scheduleHandler, jwtSecretBytes, cfg.Port,
+		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
 		map[string]server.DependencyCheck{
 			"database": db.Ping,
 			"redis": func(ctx context.Context) error {

@@ -24,6 +24,9 @@ type Client interface {
 	// starting strictly after cursor (empty cursor streams only new payments).
 	// It blocks until ctx is canceled or the stream errors.
 	StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error
+	// Offers returns the open offers for an account, up to limit (capped by
+	// Horizon at 200 per page).
+	Offers(accountID string, limit uint) ([]horizon.Offer, error)
 }
 
 type horizonClient struct {
@@ -107,6 +110,17 @@ func (c *horizonClient) StreamPayments(ctx context.Context, accountID, cursor st
 		return fmt.Errorf("stream payments for account %s: %w", accountID, err)
 	}
 	return nil
+}
+
+func (c *horizonClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	page, err := c.inner.Offers(horizonclient.OfferRequest{
+		ForAccount: accountID,
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("offers for account %s: %w", accountID, err)
+	}
+	return page.Embedded.Records, nil
 }
 
 func (c *horizonClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error) {
