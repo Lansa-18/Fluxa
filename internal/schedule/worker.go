@@ -37,6 +37,17 @@ func (w *Worker) HandleRunSchedules(ctx context.Context, _ *asynq.Task) error {
 }
 
 func (w *Worker) runOne(ctx context.Context, sch *domain.Schedule) {
+	// Atomically claim the schedule
+	claimed, err := w.repo.Claim(ctx, sch.ID, sch.NextRunAt)
+	if err != nil {
+		log.Error().Err(err).Str("schedule_id", sch.ID).Msg("failed to claim schedule")
+		return
+	}
+	if !claimed {
+		// Another worker claimed it or it is no longer due/active
+		return
+	}
+
 	runCtx := ctx
 	if sch.TenantID != nil {
 		runCtx = tenant.WithID(ctx, *sch.TenantID)
@@ -44,9 +55,17 @@ func (w *Worker) runOne(ctx context.Context, sch *domain.Schedule) {
 
 	if _, err := w.transferSvc.InitiateTransfer(runCtx, sch.FromWallet, sch.ToWallet, sch.Asset, sch.Amount); err != nil {
 		log.Error().Err(err).Str("schedule_id", sch.ID).Msg("scheduled transfer failed to initiate")
+		// Fail the schedule to avoid blind advancement and skipping occurrences
+		sch.Status = domain.ScheduleStatusFailed
+		sch.UpdatedAt = time.Now().UTC()
+		if updateErr := w.repo.Update(ctx, sch); updateErr != nil {
+			log.Error().Err(updateErr).Str("schedule_id", sch.ID).Msg("failed to update schedule to failed status")
+		}
+		return
 	}
 
 	sch.NextRunAt = AddInterval(sch.NextRunAt, sch.Frequency)
+	sch.Status = domain.ScheduleStatusActive // reset to active from processing
 	if sch.EndAt != nil && sch.NextRunAt.After(*sch.EndAt) {
 		sch.Status = domain.ScheduleStatusCompleted
 	}
