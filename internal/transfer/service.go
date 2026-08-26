@@ -2,6 +2,7 @@ package transfer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,6 +23,13 @@ type TenantGetter interface {
 
 type Service interface {
 	InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error)
+	// InitiateTransferIdempotent behaves like InitiateTransfer, but first
+	// checks whether a transaction already exists for (org, idempotencyKey)
+	// and returns it unchanged instead of creating a duplicate. It backs the
+	// idempotency-key-protected POST /v1/transfers endpoint; callers that
+	// don't need key-scoped dedup (scheduled transfers, fiat settlement) keep
+	// using InitiateTransfer directly.
+	InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error)
 	InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error)
 	GetTransaction(ctx context.Context, id string) (*domain.Transaction, error)
 	ListTransactions(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error)
@@ -51,14 +59,25 @@ func (s *service) WithStellarClient(stellarClient stellar.Client) Service {
 }
 
 func (s *service) InitiateTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal) (*domain.Transaction, error) {
-	return s.initiate(ctx, fromID, toID, asset, amount, "", "")
+	return s.initiate(ctx, fromID, toID, asset, amount, "", "", "")
+}
+
+func (s *service) InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error) {
+	if idempotencyKey != "" {
+		if existing, err := s.repo.GetByIdempotencyKey(ctx, tenant.IDFromContext(ctx), idempotencyKey); err == nil {
+			return existing, nil
+		} else if !errors.Is(err, domain.ErrTransactionNotFound) {
+			return nil, fmt.Errorf("check idempotency key: %w", err)
+		}
+	}
+	return s.initiate(ctx, fromID, toID, asset, amount, "", "", idempotencyKey)
 }
 
 func (s *service) InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
-	return s.initiate(ctx, fromID, toID, asset, amount, batchID, reference)
+	return s.initiate(ctx, fromID, toID, asset, amount, batchID, reference, "")
 }
 
-func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
+func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference, idempotencyKey string) (*domain.Transaction, error) {
 	if fromID == toID {
 		return nil, domain.ErrSelfTransfer
 	}
@@ -109,19 +128,20 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	}
 
 	tx := &domain.Transaction{
-		ID:         uuid.New().String(),
-		Type:       domain.TypeTransfer,
-		Status:     domain.StatusPending,
-		FromWallet: fromID,
-		ToWallet:   toID,
-		Asset:      asset,
-		Amount:     amount,
-		Fee:        feeResult.FeeAmount,
-		FeeBps:     feeResult.FeeBps,
-		TenantID:   tenantPtr,
-		BatchID:    batchPtr,
-		Reference:  reference,
-		CreatedAt:  time.Now().UTC(),
+		ID:             uuid.New().String(),
+		Type:           domain.TypeTransfer,
+		Status:         domain.StatusPending,
+		FromWallet:     fromID,
+		ToWallet:       toID,
+		Asset:          asset,
+		Amount:         amount,
+		Fee:            feeResult.FeeAmount,
+		FeeBps:         feeResult.FeeBps,
+		TenantID:       tenantPtr,
+		BatchID:        batchPtr,
+		Reference:      reference,
+		CreatedAt:      time.Now().UTC(),
+		IdempotencyKey: idempotencyKey,
 	}
 
 	if err := s.repo.Create(ctx, tx); err != nil {

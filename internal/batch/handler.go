@@ -12,17 +12,29 @@ import (
 )
 
 type Handler struct {
-	svc Service
+	svc  Service
+	idem func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// WithIdempotency attaches the idempotency-key middleware to the
+// state-mutating route (POST /) only.
+func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
+	h.idem = mw
+	return h
+}
+
 // Routes is mounted at /v1/transfers/batch.
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.createBatch)
+		post := r.Post
+		if h.idem != nil {
+			post = r.With(h.idem).Post
+		}
+		post("/", h.createBatch)
 		r.Get("/{batchId}", h.getBatch)
 		r.Get("/{batchId}/export", h.exportBatch)
 	}

@@ -60,6 +60,9 @@ func (m *mockTxRepo) ListByWallet(ctx context.Context, walletID string, limit, o
 func (m *mockTxRepo) ExistsByTxHash(ctx context.Context, txHash string) (bool, error) {
 	return false, nil
 }
+func (m *mockTxRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
+}
 func (m *mockTxRepo) CountMonthlyTransfersByTenant(ctx context.Context, tenantID string, year int, month timeMonth) (int, error) {
 	return 0, nil
 }

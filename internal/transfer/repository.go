@@ -17,4 +17,7 @@ type Repository interface {
 	// ExistsByTxHash reports whether a transaction with the given Stellar hash
 	// has already been recorded, used to keep indexer sync idempotent.
 	ExistsByTxHash(ctx context.Context, txHash string) (bool, error)
+	// GetByIdempotencyKey returns the transaction previously created for this
+	// org/idempotency-key pair, or domain.ErrTransactionNotFound if none exists.
+	GetByIdempotencyKey(ctx context.Context, orgID, idempotencyKey string) (*domain.Transaction, error)
 }
