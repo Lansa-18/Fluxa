@@ -77,6 +77,10 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())
 	case errors.Is(err, domain.ErrQuoteAlreadyUsed):
 		UnprocessableEntity(w, "QUOTE_ALREADY_USED", err.Error())
+	case errors.Is(err, domain.ErrInsufficientSweepableBalance):
+		Error(w, http.StatusBadRequest, "INSUFFICIENT_SWEEPABLE_BALANCE", err.Error())
+	case errors.Is(err, domain.ErrTreasuryConfigNotFound):
+		NotFound(w, err.Error())
 	default:
 		InternalError(w, err)
 	}

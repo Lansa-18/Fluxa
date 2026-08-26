@@ -106,6 +106,9 @@ func (f *fakeTransferRepo) ListByBatch(_ context.Context, batchID string) ([]*do
 	return nil, nil
 }
 
+func (f *fakeTransferRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
+}
 func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
 	return f.existing[txHash], nil
 }
@@ -143,6 +146,10 @@ func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]op
 	if f.payments != nil {
 		return f.payments(accountID, cursor, limit)
 	}
+	return nil, nil
+}
+
+func (f *fakeStellarClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
 	return nil, nil
 }
 

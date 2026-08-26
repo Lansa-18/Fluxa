@@ -9,17 +9,29 @@ import (
 )
 
 type Handler struct {
-	svc Service
+	svc  Service
+	idem func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// WithIdempotency attaches the idempotency-key middleware to the
+// state-mutating route (POST /convert) only; quoting is not mutating.
+func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
+	h.idem = mw
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Post("/quote", h.getQuote)
-		r.Post("/convert", h.convert)
+		convert := r.Post
+		if h.idem != nil {
+			convert = r.With(h.idem).Post
+		}
+		convert("/convert", h.convert)
 		r.Get("/rates", h.getRates)
 	}
 }

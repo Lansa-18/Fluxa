@@ -88,6 +88,10 @@ func (f *fakeTransferSvc) InitiateTransfer(ctx context.Context, fromID, toID, as
 	return f.InitiateBatchTransfer(ctx, fromID, toID, asset, amount, "", "")
 }
 
+func (f *fakeTransferSvc) InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error) {
+	return f.InitiateTransfer(ctx, fromID, toID, asset, amount)
+}
+
 func (f *fakeTransferSvc) InitiateBatchTransfer(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
 	f.calls++
 	if f.failOn[toID] {

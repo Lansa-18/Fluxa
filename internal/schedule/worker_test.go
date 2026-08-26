@@ -25,6 +25,10 @@ func (f *fakeTransferSvc) InitiateTransfer(_ context.Context, fromID, toID, asse
 	return &domain.Transaction{ID: "tx-1"}, nil
 }
 
+func (f *fakeTransferSvc) InitiateTransferIdempotent(ctx context.Context, fromID, toID, asset string, amount decimal.Decimal, idempotencyKey string) (*domain.Transaction, error) {
+	return f.InitiateTransfer(ctx, fromID, toID, asset, amount)
+}
+
 func (f *fakeTransferSvc) InitiateBatchTransfer(_ context.Context, fromID, toID, asset string, amount decimal.Decimal, batchID, reference string) (*domain.Transaction, error) {
 	return &domain.Transaction{ID: "tx-1"}, nil
 }

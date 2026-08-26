@@ -14,6 +14,7 @@ import (
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/config"
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
@@ -25,9 +26,11 @@ import (
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/server"
+	"github.com/fluxa/fluxa/internal/server/idempotency"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
@@ -94,6 +97,9 @@ func main() {
 	batchRepo := postgres.NewBatchRepo(db)
 	scheduleRepo := postgres.NewScheduleRepo(db)
 	anchorRepo := postgres.NewAnchorRepo(db)
+	treasuryRepo := postgres.NewTreasuryRepo(db)
+	idempotencyRepo := postgres.NewIdempotencyRepo(db)
+	idemMW := idempotency.Middleware(idempotencyRepo)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -136,6 +142,12 @@ func main() {
 		log.Fatal().Err(err).Msg("load anchor registry")
 	}
 	anchorFiatSvc := fiat.NewAnchorFiatService(anchorRegistry, anchorRepo, walletRepo, cfg.MasterEncryptionKey, cfg.StellarNetwork)
+
+	treasurySvc := treasury.NewService(
+		treasuryRepo, stellarClient, fxSvc, webhookSvc,
+		cfg.PlatformFeeWalletPublicKey, cfg.StellarNetwork, cfg.TreasurySecretKey,
+		cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer,
+	)
 
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
@@ -193,7 +205,7 @@ func main() {
 
 	authHandler := auth.NewHandler(authSvc)
 	orgHandler := org.NewHandler(orgSvc)
-	walletHandler := wallet.NewHandler(walletSvc)
+	walletHandler := wallet.NewHandler(walletSvc).WithIdempotency(idemMW)
 
 	// Contract wallets are opt-in: without an installed WASM hash the API keeps
 	// serving custodial wallets only and the contract routes stay unregistered.
@@ -217,22 +229,23 @@ func main() {
 		contractSvc.WithSigner(signer)
 		walletHandler = walletHandler.WithContractService(contractSvc)
 	}
-	transferHandler := transfer.NewHandler(transferSvc)
-	fxHandler := fx.NewHandler(fxSvc)
+	transferHandler := transfer.NewHandler(transferSvc).WithIdempotency(idemMW)
+	fxHandler := fx.NewHandler(fxSvc).WithIdempotency(idemMW)
 	fiatHandler := fiat.NewHandler(fiatSvc)
 	anchorFiatHandler := fiat.NewAnchorHandler(anchorFiatSvc)
 	anchorHandler := anchor.NewHandler(anchorRegistry)
 	feeHandler := fees.NewHandler(feeSvc)
 	apikeyHandler := apikey.NewHandler(apiKeyRepo)
 	webhookHandler := webhook.NewHandler(webhookSvc)
-	batchHandler := batch.NewHandler(batchSvc)
+	batchHandler := batch.NewHandler(batchSvc).WithIdempotency(idemMW)
 	scheduleHandler := schedule.NewHandler(scheduleSvc)
+	treasuryHandler := treasury.NewHandler(treasurySvc).WithMutationGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 
 	srv := server.New(
 		authHandler, orgHandler, walletHandler, transferHandler, fxHandler, fiatHandler,
 		anchorFiatHandler, anchorHandler,
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
-		webhookHandler, batchHandler, scheduleHandler, jwtSecretBytes, cfg.Port,
+		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
 		map[string]server.DependencyCheck{
 			"database": db.Ping,
 			"redis": func(ctx context.Context) error {
