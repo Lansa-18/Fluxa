@@ -148,10 +148,12 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 		return nil, fmt.Errorf("persist transaction: %w", err)
 	}
 
-	if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
-		// Transaction is persisted — worker will not run, but it can be retried.
-		// Log this but don't fail the request.
-		_ = err
+	if s.queue != nil {
+		if err := s.queue.EnqueueTransfer(ctx, tx.ID); err != nil {
+			// Transaction is persisted — worker will not run, but it can be retried.
+			// Log this but don't fail the request.
+			_ = err
+		}
 	}
 
 	return tx, nil

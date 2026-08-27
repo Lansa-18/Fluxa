@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/shopspring/decimal"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/base"
 	"github.com/stellar/go/protocols/horizon/operations"
 	"github.com/stellar/go/txnbuild"
 )
@@ -63,11 +65,12 @@ func (m *mockTxRepo) ExistsByTxHash(ctx context.Context, txHash string) (bool, e
 func (m *mockTxRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
-func (m *mockTxRepo) CountMonthlyTransfersByTenant(ctx context.Context, tenantID string, year int, month timeMonth) (int, error) {
+func (m *mockTxRepo) CountMonthlyTransfersByTenant(ctx context.Context, tenantID string, year int, month time.Month) (int, error) {
 	return 0, nil
 }
-
-type timeMonth = int
+func (m *mockTxRepo) ListByBatch(ctx context.Context, batchID string) ([]*domain.Transaction, error) {
+	return nil, nil
+}
 
 type mockStellarClient struct {
 	balances []horizon.Balance
@@ -103,14 +106,11 @@ type mockFeeRepo struct{}
 func (m *mockFeeRepo) GetSchedule(ctx context.Context, tenantID *string, asset string) (*domain.FeeSchedule, error) {
 	return &domain.FeeSchedule{TransferFeeBps: 10}, nil
 }
-func (m *mockFeeRepo) CreateSchedule(ctx context.Context, fs *domain.FeeSchedule) error {
-	return nil
-}
-func (m *mockFeeRepo) ListSchedules(ctx context.Context) ([]*domain.FeeSchedule, error) {
-	return nil, nil
-}
 func (m *mockFeeRepo) RecordCollection(ctx context.Context, fc *domain.FeeCollection) error {
 	return nil
+}
+func (m *mockFeeRepo) ListCollected(ctx context.Context, start, end *time.Time) ([]*domain.FeeCollection, error) {
+	return nil, nil
 }
 
 func TestTransferMissingTrustlineReturns422Error(t *testing.T) {
@@ -126,7 +126,7 @@ func TestTransferMissingTrustlineReturns422Error(t *testing.T) {
 	// Stellar account has only XLM balance, no USDC trustline
 	stClient := &mockStellarClient{
 		balances: []horizon.Balance{
-			{Code: "", Balance: "100.0000000"},
+			{Asset: base.Asset{Code: ""}, Balance: "100.0000000"},
 		},
 	}
 
@@ -159,7 +159,7 @@ func TestTransferXLMRequiresNoTrustline(t *testing.T) {
 
 	stClient := &mockStellarClient{
 		balances: []horizon.Balance{
-			{Code: "", Balance: "100.0000000"},
+			{Asset: base.Asset{Code: ""}, Balance: "100.0000000"},
 		},
 	}
 

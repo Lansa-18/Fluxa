@@ -9,7 +9,6 @@ import (
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 type Repository interface {
@@ -82,22 +81,17 @@ func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*Dep
 
 func (s *service) InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (*WithdrawResponse, error) {
 	// For withdrawal, user provides Fiat amount they want to receive. 
-	// The source is USDC, the dest is Fiat. 
-	// Note: fxSvc.GetQuote takes (sourceAsset, destAsset, sourceAmount)
-	// So we need to calculate how much USDC is needed for req.FiatAmount.
-	// As a simplification, let's treat the fiat amount as the "destAmount",
-	// but GetQuote wants sourceAmount. 
-	// To simplify for this integration, we will use a fixed rate or inverse if needed.
-	// Actually, GetQuote might not support fiat assets yet in stellar paths natively,
-	// so for this demo, we'll use a mocked quote response if GetQuote fails for Fiat, 
-	// but let's assume GetQuote works or we simulate it.
-	
-	// Because Fluxa uses Stellar FindPathsStrict, which requires Stellar assets, 
-	// "NGN" might not exist on Stellar unless issued. 
-	// Let's assume there's a 1 USDC = 1000 NGN fixed rate for this abstraction 
-	// if fx.Service fails, or we just manually define the USDC amount.
-	
-	rate := decimal.NewFromInt(1500) // 1 USDC = 1500 NGN
+	// Get live exchange rate from FX service. We fetch the quote for 1 USDC to determine the rate.
+	quote, err := s.fxSvc.GetQuote(ctx, "USDC", req.FiatCurrency, "1")
+	if err != nil {
+		return nil, fmt.Errorf("get FX rate for withdrawal: %w", err)
+	}
+
+	rate := quote.Rate
+	if rate.IsZero() {
+		return nil, fmt.Errorf("FX service returned a zero exchange rate")
+	}
+
 	usdcAmount := req.FiatAmount.Div(rate)
 
 	withdrawal := &domain.FiatWithdrawal{
@@ -117,7 +111,7 @@ func (s *service) InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (
 	}
 
 	// Debit user wallet, credit platform wallet
-	_, err := s.transferSvc.InitiateTransfer(ctx, req.WalletID, s.platformWalletID, "USDC", usdcAmount)
+	_, err = s.transferSvc.InitiateTransfer(ctx, req.WalletID, s.platformWalletID, "USDC", usdcAmount)
 	if err != nil {
 		_ = s.repo.UpdateWithdrawalStatus(ctx, withdrawal.ID, domain.FiatStatusFailed)
 		return nil, fmt.Errorf("initiate transfer to platform: %w", err)

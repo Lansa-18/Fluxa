@@ -10,6 +10,7 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/shopspring/decimal"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/base"
 	"github.com/stellar/go/protocols/horizon/operations"
 	"github.com/stellar/go/txnbuild"
 )
@@ -145,15 +146,15 @@ func TestGetBalancesMultiAssetWithFX(t *testing.T) {
 	mockStellarClient := &fullMockStellar{
 		account: horizon.Account{
 			Balances: []horizon.Balance{
-				{Code: "", Balance: "100.5000000"},
-				{Code: "USDC", Issuer: "GUSDC123", Balance: "50.0000000"},
+				{Asset: base.Asset{Code: ""}, Balance: "100.5000000"},
+				{Asset: base.Asset{Code: "USDC", Issuer: "GUSDC123"}, Balance: "50.0000000"},
 			},
 		},
 	}
 
 	masterKey := make([]byte, 32)
 	svc := wallet.NewService(repo, mockStellarClient, masterKey).
-		WithFXService(&mockFXService()).
+		WithFXService(&mockFXService{}).
 		WithIssuers("GUSDC123", "GEURC123")
 
 	balances, err := svc.GetBalances(context.Background(), "w-1", "USD")
