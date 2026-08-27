@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
@@ -109,12 +110,15 @@ func main() {
 	reconcileSvc := reconcile.NewService(
 		txRepo,
 		reconcileRepo,
+		walletRepo,
 		stellarClient,
 		alertClient,
 		qClient,
 		webhookSvc,
 		"fluxa-worker",
 		balanceThreshold,
+		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
+		cfg.PlatformFeeWalletPublicKey,
 	)
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 

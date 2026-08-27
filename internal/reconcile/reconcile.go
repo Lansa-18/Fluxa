@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/stellar"
@@ -41,6 +42,7 @@ type AuditLogEntry struct {
 	HorizonStatus  string
 	AmountVerified bool
 	AssetVerified  bool
+	FeeVerified    bool
 	Outcome        AuditOutcome
 	Details        string
 }
@@ -98,36 +100,54 @@ type WalletRepository interface {
 	WriteBalanceDiscrepancy(ctx context.Context, d *BalanceDiscrepancy) error
 }
 
+// WalletLookup resolves a wallet ID to its Stellar public key. Implemented by
+// postgres.WalletRepo. Used so reconciliation can require that a Horizon
+// payment operation's exact source/destination accounts match the wallets
+// the transaction actually references, instead of accepting any account
+// moving a matching amount/asset (#97).
+type WalletLookup interface {
+	GetByID(ctx context.Context, id string) (*domain.Wallet, error)
+}
+
 type Service struct {
-	repo             Repository
-	walletRepo       WalletRepository
-	stellar          stellar.Client
-	alerting         *alerting.Client
-	queue            *queue.Client
-	webhookSvc       webhook.Service
-	svcName          string
-	balanceThreshold decimal.Decimal
+	repo               Repository
+	walletRepo         WalletRepository
+	walletLookup       WalletLookup
+	stellar            stellar.Client
+	alerting           *alerting.Client
+	queue              *queue.Client
+	webhookSvc         webhook.Service
+	svcName            string
+	balanceThreshold   decimal.Decimal
+	assetRegistry      *assets.Registry
+	platformFeeWallet  string
 }
 
 func NewService(
 	repo Repository,
 	walletRepo WalletRepository,
+	walletLookup WalletLookup,
 	stellarClient stellar.Client,
 	alertingClient *alerting.Client,
 	q *queue.Client,
 	webhookSvc webhook.Service,
 	svcName string,
 	balanceThreshold decimal.Decimal,
+	assetRegistry *assets.Registry,
+	platformFeeWallet string,
 ) *Service {
 	return &Service{
-		repo:             repo,
-		walletRepo:       walletRepo,
-		stellar:          stellarClient,
-		alerting:         alertingClient,
-		queue:            q,
-		webhookSvc:       webhookSvc,
-		svcName:          svcName,
-		balanceThreshold: balanceThreshold,
+		repo:              repo,
+		walletRepo:        walletRepo,
+		walletLookup:      walletLookup,
+		stellar:           stellarClient,
+		alerting:          alertingClient,
+		queue:             q,
+		webhookSvc:        webhookSvc,
+		svcName:           svcName,
+		balanceThreshold:  balanceThreshold,
+		assetRegistry:     assetRegistry,
+		platformFeeWallet: platformFeeWallet,
 	}
 }
 
@@ -295,7 +315,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 				return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
 			}
 
-			s.writeAudit(ctx, tx, "HTTP 404", false, false, AuditNotFound, "transaction not found on Horizon")
+			s.writeAudit(ctx, tx, "HTTP 404", false, false, false, AuditNotFound, "transaction not found on Horizon")
 			s.alerting.Critical(ctx, "Reconciliation Failed: Missing Transaction",
 				fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but returned 404 on Horizon. Possible ledger loss or fork.", tx.ID, hash))
 			return nil
@@ -309,7 +329,7 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 			return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
 		}
 
-		s.writeAudit(ctx, tx, "unsuccessful", false, false, AuditNotFound,
+		s.writeAudit(ctx, tx, "unsuccessful", false, false, false, AuditNotFound,
 			fmt.Sprintf("transaction successful=false on Horizon (result: %s)", horizonTx.ResultXdr))
 		s.alerting.Critical(ctx, "Reconciliation Failed: Unsuccessful Transaction",
 			fmt.Sprintf("Transaction %s (hash: %s) is marked confirmed in DB but Horizon reports it as unsuccessful.", tx.ID, hash))
@@ -321,23 +341,29 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 		return fmt.Errorf("fetch operations for transaction: %w", err)
 	}
 
-	amountVerified, assetVerified, details := verifyOps(tx, ops)
+	expected, err := s.buildExpectedPayment(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("resolve expected payment for tx %s: %w", tx.ID, err)
+	}
 
-	if !amountVerified || !assetVerified {
+	amountVerified, assetVerified, feeVerified, details := verifyOps(ops, expected)
+
+	if !amountVerified || !assetVerified || !feeVerified {
 		log.Error().Str("tx_id", tx.ID).Str("tx_hash", hash).
 			Bool("amount_verified", amountVerified).Bool("asset_verified", assetVerified).
-			Msg("reconcile: amount/asset mismatch")
+			Bool("fee_verified", feeVerified).
+			Msg("reconcile: payment mismatch")
 		if repoErr := s.repo.UpdateReconciliationStatus(ctx, tx.ID, domain.StatusReconciliationFailed); repoErr != nil {
 			return fmt.Errorf("update status to reconciliation_failed: %w", repoErr)
 		}
 
-		s.writeAudit(ctx, tx, horizonStatus(&horizonTx), amountVerified, assetVerified, AuditMismatch, details)
-		s.alerting.Critical(ctx, "Reconciliation Failed: Amount/Asset Mismatch",
+		s.writeAudit(ctx, tx, horizonStatus(&horizonTx), amountVerified, assetVerified, feeVerified, AuditMismatch, details)
+		s.alerting.Critical(ctx, "Reconciliation Failed: Payment Mismatch",
 			fmt.Sprintf("Transaction %s (hash: %s): %s", tx.ID, hash, details))
 		return nil
 	}
 
-	s.writeAudit(ctx, tx, horizonStatus(&horizonTx), true, true, AuditOK, "all checks passed")
+	s.writeAudit(ctx, tx, horizonStatus(&horizonTx), true, true, true, AuditOK, "all checks passed")
 	if err := s.repo.UpdateReconciledAt(ctx, tx.ID); err != nil {
 		log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: update reconciled_at")
 	}
@@ -346,59 +372,193 @@ func (s *Service) checkTransaction(ctx context.Context, tx *domain.Transaction) 
 	return nil
 }
 
-func verifyOps(tx *domain.Transaction, ops []operations.Operation) (amountVerified, assetVerified bool, details string) {
-	for _, op := range ops {
-		opType := op.GetType()
-		if opType != "payment" && opType != "path_payment_strict_send" && opType != "path_payment_strict_receive" {
-			continue
-		}
+// expectedPayment describes exactly what the platform expects a reconciled
+// transaction's on-chain operations to contain: the precise source and
+// destination accounts (not just "some account"), the asset's code AND
+// issuer/native identity (not just a matching code, which a look-alike asset
+// could also have), and the exact net amount — plus, when the transaction
+// carries a platform fee, the exact fee leg paid to the platform fee wallet.
+type expectedPayment struct {
+	// FromPublicKey is "" when the transaction has no internal source wallet
+	// (e.g. a deposit discovered by the indexer from an external account),
+	// in which case the source account is intentionally not constrained.
+	FromPublicKey      string
+	ToPublicKey        string
+	AssetCode          string
+	AssetIssuer        string // "" for native XLM
+	NetAmount          decimal.Decimal
+	Fee                decimal.Decimal
+	FeeWalletPublicKey string
+}
 
-		var amount, assetType, assetCode string
-		switch p := op.(type) {
-		case operations.Payment:
-			amount = p.Amount
-			assetType = p.Asset.Type
-			assetCode = p.Asset.Code
-		case operations.PathPayment:
-			amount = p.Amount
-			assetType = p.Asset.Type
-			assetCode = p.Asset.Code
-		default:
-			continue
-		}
+// buildExpectedPayment resolves a transaction's wallet IDs and asset code
+// into the concrete Stellar accounts and asset identity reconciliation must
+// match against Horizon, using the same asset registry and platform fee
+// wallet the settlement engine uses to build the original payment.
+func (s *Service) buildExpectedPayment(ctx context.Context, tx *domain.Transaction) (expectedPayment, error) {
+	exp := expectedPayment{
+		NetAmount:          tx.NetAmount(),
+		Fee:                tx.Fee,
+		FeeWalletPublicKey: s.platformFeeWallet,
+	}
 
-		if amount == "" {
-			continue
-		}
-
-		horizonAmount, err := decimal.NewFromString(amount)
+	if tx.FromWallet != "" {
+		fromWallet, err := s.walletLookup.GetByID(ctx, tx.FromWallet)
 		if err != nil {
+			return expectedPayment{}, fmt.Errorf("resolve source wallet %s: %w", tx.FromWallet, err)
+		}
+		exp.FromPublicKey = fromWallet.PublicKey
+	}
+
+	if tx.ToWallet != "" {
+		toWallet, err := s.walletLookup.GetByID(ctx, tx.ToWallet)
+		if err != nil {
+			return expectedPayment{}, fmt.Errorf("resolve destination wallet %s: %w", tx.ToWallet, err)
+		}
+		exp.ToPublicKey = toWallet.PublicKey
+	}
+
+	if tx.Asset == "XLM" {
+		exp.AssetCode = "XLM"
+	} else if asset, ok := s.assetRegistry.Get(tx.Asset); ok {
+		exp.AssetCode = asset.Code
+		exp.AssetIssuer = asset.Issuer
+	} else {
+		return expectedPayment{}, fmt.Errorf("asset %q is not in the platform asset registry", tx.Asset)
+	}
+
+	return exp, nil
+}
+
+// candidatePayment is the subset of a Horizon payment/path-payment operation
+// relevant to reconciliation matching, extracted independently of which
+// concrete Horizon SDK operation type carried it.
+type candidatePayment struct {
+	From        string
+	To          string
+	Amount      decimal.Decimal
+	AssetType   string
+	AssetCode   string
+	AssetIssuer string
+}
+
+// assetIdentityMatches reports whether the candidate's asset is the exact
+// asset the platform expects: native XLM must match on type alone (native
+// assets carry no code/issuer), while a credit asset must match on code AND
+// issuer — a look-alike token sharing a code (e.g. an unofficial "USDC")
+// with a different issuer must not be accepted.
+func (c candidatePayment) assetIdentityMatches(expected expectedPayment) bool {
+	if expected.AssetCode == "XLM" {
+		return c.AssetType == "native"
+	}
+	return c.AssetType != "native" && c.AssetCode == expected.AssetCode && c.AssetIssuer == expected.AssetIssuer
+}
+
+// matchesMainLeg reports whether this single candidate operation satisfies
+// every expected property of the transaction's primary payment leg at once:
+// exact source (when one is expected), exact destination, exact asset
+// identity, and the exact net amount. Matching amount and asset independently
+// on different operations — the root cause of #97 — is deliberately not
+// possible here since every check runs against the same candidate.
+func (c candidatePayment) matchesMainLeg(expected expectedPayment) bool {
+	if expected.FromPublicKey != "" && c.From != expected.FromPublicKey {
+		return false
+	}
+	if expected.ToPublicKey != "" && c.To != expected.ToPublicKey {
+		return false
+	}
+	if !c.assetIdentityMatches(expected) {
+		return false
+	}
+	return c.Amount.Equal(expected.NetAmount)
+}
+
+// matchesFeeLeg reports whether this candidate operation is the distinct fee
+// payment the settlement engine submits alongside the main payment whenever
+// tx.Fee > 0: the exact fee amount, in the same asset, paid to the platform
+// fee wallet specifically (not merely to "an" account).
+func (c candidatePayment) matchesFeeLeg(expected expectedPayment) bool {
+	if expected.FeeWalletPublicKey == "" || c.To != expected.FeeWalletPublicKey {
+		return false
+	}
+	if !c.assetIdentityMatches(expected) {
+		return false
+	}
+	return c.Amount.Equal(expected.Fee)
+}
+
+// extractCandidatePayment pulls the fields relevant to matching out of a
+// Horizon operation, or reports ok=false for anything that isn't a
+// payment/path-payment operation with a parseable amount.
+func extractCandidatePayment(op operations.Operation) (candidate candidatePayment, ok bool) {
+	opType := op.GetType()
+	if opType != "payment" && opType != "path_payment_strict_send" && opType != "path_payment_strict_receive" {
+		return candidatePayment{}, false
+	}
+
+	var from, to, amountStr, assetType, assetCode, assetIssuer string
+	switch p := op.(type) {
+	case operations.Payment:
+		from, to, amountStr = p.From, p.To, p.Amount
+		assetType, assetCode, assetIssuer = p.Asset.Type, p.Asset.Code, p.Asset.Issuer
+	case operations.PathPayment:
+		from, to, amountStr = p.From, p.To, p.Amount
+		assetType, assetCode, assetIssuer = p.Asset.Type, p.Asset.Code, p.Asset.Issuer
+	default:
+		return candidatePayment{}, false
+	}
+
+	if amountStr == "" {
+		return candidatePayment{}, false
+	}
+	amount, err := decimal.NewFromString(amountStr)
+	if err != nil {
+		return candidatePayment{}, false
+	}
+
+	return candidatePayment{
+		From:        from,
+		To:          to,
+		Amount:      amount,
+		AssetType:   assetType,
+		AssetCode:   assetCode,
+		AssetIssuer: assetIssuer,
+	}, true
+}
+
+// verifyOps checks the transaction's Horizon operations against exactly what
+// the platform expects. amountVerified/assetVerified are only ever set
+// together, by a single candidate operation that matches source,
+// destination, asset identity, and amount simultaneously — an unrelated
+// operation that merely happens to share the amount or the asset code is
+// rejected. When the transaction carries a platform fee, feeVerified
+// additionally requires a distinct operation paying that exact fee to the
+// platform fee wallet.
+func verifyOps(ops []operations.Operation, expected expectedPayment) (amountVerified, assetVerified, feeVerified bool, details string) {
+	feeVerified = !expected.Fee.GreaterThan(decimal.Zero)
+
+	for _, op := range ops {
+		candidate, ok := extractCandidatePayment(op)
+		if !ok {
 			continue
 		}
 
-		netAmount := tx.NetAmount()
-		if horizonAmount.Equal(netAmount) || horizonAmount.Equal(tx.Amount) {
+		if !amountVerified && candidate.matchesMainLeg(expected) {
 			amountVerified = true
-		}
-
-		expectedCode := tx.Asset
-		matched := false
-		if expectedCode == "XLM" && assetType == "native" {
-			matched = true
-		} else if expectedCode != "" && assetCode == expectedCode {
-			matched = true
-		}
-		if matched {
 			assetVerified = true
 		}
-
-		if amountVerified && assetVerified {
-			return true, true, ""
+		if !feeVerified && candidate.matchesFeeLeg(expected) {
+			feeVerified = true
+		}
+		if amountVerified && feeVerified {
+			return true, true, true, ""
 		}
 	}
 
-	return amountVerified, assetVerified,
-		fmt.Sprintf("DB: amount=%s asset=%s | Horizon ops: %d checked", tx.Amount, tx.Asset, len(ops))
+	return amountVerified, assetVerified, feeVerified, fmt.Sprintf(
+		"expected from=%q to=%q asset=%s issuer=%q net_amount=%s fee=%s fee_wallet=%q | Horizon ops: %d checked",
+		expected.FromPublicKey, expected.ToPublicKey, expected.AssetCode, expected.AssetIssuer,
+		expected.NetAmount, expected.Fee, expected.FeeWalletPublicKey, len(ops))
 }
 
 // RecoverPending re-enqueues stuck pending transactions (regardless of whether
@@ -569,7 +729,7 @@ type SummaryResponse struct {
 	PendingStuck  int               `json:"pending_stuck"`
 }
 
-func (s *Service) writeAudit(ctx context.Context, tx *domain.Transaction, horizonStatus string, amountOK, assetOK bool, outcome AuditOutcome, details string) {
+func (s *Service) writeAudit(ctx context.Context, tx *domain.Transaction, horizonStatus string, amountOK, assetOK, feeOK bool, outcome AuditOutcome, details string) {
 	entry := &AuditLogEntry{
 		ID:             uuid.New().String(),
 		TxID:           tx.ID,
@@ -578,6 +738,7 @@ func (s *Service) writeAudit(ctx context.Context, tx *domain.Transaction, horizo
 		HorizonStatus:  horizonStatus,
 		AmountVerified: amountOK,
 		AssetVerified:  assetOK,
+		FeeVerified:    feeOK,
 		Outcome:        outcome,
 		Details:        details,
 	}

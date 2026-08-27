@@ -11,6 +11,7 @@ import (
 	"github.com/fluxa/fluxa/internal/alerting"
 	"github.com/fluxa/fluxa/internal/anchor"
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/auth"
 	"github.com/fluxa/fluxa/internal/batch"
 	"github.com/fluxa/fluxa/internal/config"
@@ -194,12 +195,15 @@ func main() {
 	reconcileSvc := reconcile.NewService(
 		txRepo,
 		reconcileRepo,
+		walletRepo,
 		stellarClient,
 		alertClient,
 		queueClient,
 		webhookSvc,
 		"fluxa-api",
 		decimal.Zero,
+		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
+		cfg.PlatformFeeWalletPublicKey,
 	)
 	reconcileHandler := reconcile.NewHandler(reconcileSvc)
 

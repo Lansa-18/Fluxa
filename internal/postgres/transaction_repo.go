@@ -403,10 +403,10 @@ func (r *TransactionRepo) UpdateReconciledAt(ctx context.Context, id string) err
 // WriteAuditLog inserts a row into the ledger_audit_log table.
 func (r *TransactionRepo) WriteAuditLog(ctx context.Context, entry *reconcile.AuditLogEntry) error {
 	_, err := r.db.Exec(ctx,
-		`INSERT INTO ledger_audit_log (id, tx_id, stellar_hash, checked_at, horizon_status, amount_verified, asset_verified, outcome, details)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		`INSERT INTO ledger_audit_log (id, tx_id, stellar_hash, checked_at, horizon_status, amount_verified, asset_verified, fee_verified, outcome, details)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		entry.ID, entry.TxID, entry.StellarHash, entry.CheckedAt,
-		entry.HorizonStatus, entry.AmountVerified, entry.AssetVerified,
+		entry.HorizonStatus, entry.AmountVerified, entry.AssetVerified, entry.FeeVerified,
 		entry.Outcome, entry.Details,
 	)
 	if err != nil {
