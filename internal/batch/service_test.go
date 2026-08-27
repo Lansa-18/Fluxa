@@ -59,6 +59,10 @@ func (f *fakeTxRepo) UpdateStatus(_ context.Context, id string, status domain.Tr
 	return nil
 }
 
+func (f *fakeTxRepo) GetByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
+}
+
 func (f *fakeTxRepo) ListByWallet(_ context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
 	return nil, nil
 }
