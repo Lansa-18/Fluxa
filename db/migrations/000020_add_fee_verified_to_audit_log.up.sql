@@ -1,0 +1,2 @@
+ALTER TABLE ledger_audit_log
+    ADD COLUMN IF NOT EXISTS fee_verified BOOLEAN NOT NULL DEFAULT FALSE;
