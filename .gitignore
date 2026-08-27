@@ -17,6 +17,7 @@ dist/
 *.test
 *.out
 vendor/
+# go.sum is explicitly committed for reproducible builds
 
 # IDE
 .vscode/
