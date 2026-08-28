@@ -16,6 +16,7 @@ type Config struct {
 	StellarNetwork   string
 	StellarHorizonURL string
 	StellarUSDCIssuer string
+	StellarEURCIssuer string
 	MasterEncryptionKey []byte
 	TreasurySecretKey string
 	PlatformFeeWalletPublicKey string
@@ -70,6 +71,7 @@ func Load() (*Config, error) {
 		StellarNetwork:    viper.GetString("STELLAR_NETWORK"),
 		StellarHorizonURL: viper.GetString("STELLAR_HORIZON_URL"),
 		StellarUSDCIssuer: viper.GetString("STELLAR_USDC_ISSUER"),
+		StellarEURCIssuer: viper.GetString("STELLAR_EURC_ISSUER"),
 		MasterEncryptionKey: keyBytes,
 		TreasurySecretKey: viper.GetString("TREASURY_SECRET_KEY"),
 		PlatformFeeWalletPublicKey: viper.GetString("PLATFORM_FEE_WALLET_PUBLIC_KEY"),

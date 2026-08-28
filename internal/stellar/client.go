@@ -16,6 +16,7 @@ type Client interface {
 	FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error)
 	TransactionDetail(hash string) (horizon.Transaction, error)
 	OperationsForTransaction(hash string) ([]operations.Operation, error)
+	PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error)
 }
 
 type horizonClient struct {
@@ -75,4 +76,24 @@ func (c *horizonClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, de
 		return nil, fmt.Errorf("find paths: %w", err)
 	}
 	return paths.Embedded.Records, nil
+}
+
+func (c *horizonClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error) {
+	req := horizonclient.PaymentsRequest{
+		ForAccount: accountID,
+		Limit:      uint(limit),
+	Order:      horizonclient.OrderAsc,
+	}
+	if cursor != "" {
+		req.Cursor = cursor
+	}
+	page, err := c.inner.Payments(req)
+	if err != nil {
+		return nil, fmt.Errorf("payments for account: %w", err)
+	}
+	var payments []horizon.Payment
+	for _, r := range page.Embedded.Records {
+		payments = append(payments, r)
+	}
+	return payments, nil
 }

@@ -383,3 +383,29 @@ func (r *TransactionRepo) GetPendingStuckCount(ctx context.Context, olderThan ti
 	}
 	return count, nil
 }
+
+// UpsertByTxHash inserts a transaction only if no row with the same tx_hash exists.
+// Returns nil (no-op) when a duplicate is detected, making it safe for concurrent callers.
+func (r *TransactionRepo) UpsertByTxHash(ctx context.Context, tx *domain.Transaction) error {
+	tID := tenant.IDFromContext(ctx)
+	if tID != "" {
+		tx.TenantID = &tID
+	}
+	_, err := r.db.Exec(ctx,
+		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, created_at, requeue_count, reconciled_at, fiat_rail, fiat_provider_ref, fiat_status, local_currency, local_amount)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		 ON CONFLICT (tx_hash) DO NOTHING`,
+		tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
+		nullableString(tx.FromWallet), nullableString(tx.ToWallet),
+		tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
+		nullableUUID(tx.TenantID), tx.CreatedAt,
+		tx.RequeueCount, nullableTime(tx.ReconciledAt),
+		nullableStringPtr(tx.FiatRail), nullableStringPtr(tx.FiatProviderRef),
+		nullableStringPtr(tx.FiatStatus), nullableStringPtr(tx.LocalCurrency),
+		nullableDecimalPtr(tx.LocalAmount),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert transaction by tx_hash: %w", err)
+	}
+	return nil
+}

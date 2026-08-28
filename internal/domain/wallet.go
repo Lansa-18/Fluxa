@@ -7,5 +7,6 @@ type Wallet struct {
 	PublicKey       string
 	EncryptedSecret string
 	TenantID        *string
+	SyncCursor      string
 	CreatedAt       time.Time
 }

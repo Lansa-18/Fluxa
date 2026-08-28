@@ -57,7 +57,10 @@ func main() {
 	feeSvc := fees.NewService(feeRepo)
 	engine := settlement.NewEngine(
 		txRepo, walletRepo, feeSvc, stellarClient, signer,
-		cfg.StellarNetwork, cfg.StellarUSDCIssuer, cfg.PlatformFeeWalletPublicKey,
+		cfg.StellarNetwork, map[string]string{
+			"USDC": cfg.StellarUSDCIssuer,
+			"EURC": cfg.StellarEURCIssuer,
+		}, cfg.PlatformFeeWalletPublicKey,
 	)
 	settlementWorker := settlement.NewWorker(engine)
 
