@@ -90,6 +90,10 @@ func (f *fakeWalletRepo) List(_ context.Context, limit, offset int) ([]*domain.W
 	return nil, nil
 }
 
+func (f *fakeWalletRepo) GetBalances(ctx context.Context, walletID string) ([]domain.BalanceRecord, error) {
+	return nil, nil
+}
+
 func (f *fakeWalletRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
 	return 0, nil
 }

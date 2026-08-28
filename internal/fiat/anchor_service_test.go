@@ -42,7 +42,7 @@ func (f *fakeAnchorRepo) CreateTransaction(ctx context.Context, t *domain.Anchor
 	return nil
 }
 
-func (f *fakeAnchorRepo) GetTransactionByID(ctx context.Context, id string) (*domain.AnchorTransaction, error) {
+func (f *fakeAnchorRepo) GetTransactionByID(ctx context.Context, id string, tenantID *string) (*domain.AnchorTransaction, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t, ok := f.txs[id]
@@ -53,7 +53,7 @@ func (f *fakeAnchorRepo) GetTransactionByID(ctx context.Context, id string) (*do
 	return &cp, nil
 }
 
-func (f *fakeAnchorRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time) error {
+func (f *fakeAnchorRepo) UpdateTransactionStatus(ctx context.Context, id, status string, completedAt *time.Time, tenantID *string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t, ok := f.txs[id]

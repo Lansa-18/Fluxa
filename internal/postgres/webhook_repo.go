@@ -7,6 +7,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -78,7 +79,7 @@ func (r *WebhookRepo) List(ctx context.Context, tenantID *string) ([]*domain.Web
 }
 
 func (r *WebhookRepo) Delete(ctx context.Context, id string, tenantID *string) error {
-	var tag pgx.CommandTag
+	var tag pgconn.CommandTag
 	var err error
 	if tenantID != nil {
 		tag, err = r.db.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1 AND tenant_id = $2`, id, *tenantID)
