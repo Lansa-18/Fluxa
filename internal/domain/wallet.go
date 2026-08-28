@@ -34,4 +34,3 @@ type BalanceRecord struct {
 	Balance   string
 	UpdatedAt time.Time
 }
-

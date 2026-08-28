@@ -3,6 +3,7 @@ package flutterwave
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -188,21 +189,19 @@ func (p *Provider) GetStatus(ctx context.Context, providerRef string) (*fiat.Rai
 }
 
 func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, headers http.Header) (*fiat.RailEvent, error) {
-	signature := headers.Get("verif-hash")
-	if p.webhookHash != "" && p.webhookHash != "mock" {
-		if signature != p.webhookHash {
-			return nil, fmt.Errorf("invalid webhook signature")
-		}
+	if err := p.verifyWebhookSignature(headers); err != nil {
+		return nil, err
 	}
 
 	var data struct {
 		Event string `json:"event"`
 		Data  struct {
-			TxRef     string  `json:"tx_ref"`
-			Status    string  `json:"status"`
-			Amount    float64 `json:"amount"`
-			Reference string  `json:"reference"`
-			Currency  string  `json:"currency"`
+			ID        json.Number `json:"id"`
+			TxRef     string      `json:"tx_ref"`
+			Status    string      `json:"status"`
+			Amount    float64     `json:"amount"`
+			Reference string      `json:"reference"`
+			Currency  string      `json:"currency"`
 		} `json:"data"`
 	}
 
@@ -210,18 +209,25 @@ func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, headers ht
 		return nil, fmt.Errorf("parse webhook payload: %w", err)
 	}
 
-	evt := &fiat.RailEvent{
-		ProviderRef: data.Data.TxRef,
-		Status:      "failed",
+	reference := data.Data.TxRef
+	if reference == "" {
+		reference = data.Data.Reference
 	}
-	if evt.ProviderRef == "" {
-		evt.ProviderRef = data.Data.Reference
+	if reference == "" {
+		return nil, fmt.Errorf("webhook payload is missing a transaction reference")
 	}
-	evt.Amount = decimal.NewFromFloat(data.Data.Amount)
-	evt.Currency = data.Data.Currency
 
-	if data.Data.Status == "successful" {
-		evt.Status = "completed"
+	status, err := mapFlutterwaveStatus(data.Data.Status)
+	if err != nil {
+		return nil, err
+	}
+
+	evt := &fiat.RailEvent{
+		ProviderRef: reference,
+		EventID:     data.Data.ID.String(),
+		Status:      status,
+		Amount:      decimal.NewFromFloat(data.Data.Amount),
+		Currency:    data.Data.Currency,
 	}
 
 	switch data.Event {
@@ -234,4 +240,48 @@ func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, headers ht
 	}
 
 	return evt, nil
+}
+
+// verifyWebhookSignature implements Flutterwave's documented webhook
+// verification: the "verif-hash" header must match the secret hash
+// configured for this integration in the Flutterwave dashboard.
+// https://developer.flutterwave.com/docs/integration-guides/webhooks
+//
+// This fails closed: a webhook secret must be configured for signatures to
+// be checked at all, and any mismatch (including a missing header) is
+// rejected. "mock" is the same dev/test bypass convention used by the rest
+// of this provider (see GetQuote, InitiateDeposit, InitiateWithdrawal).
+func (p *Provider) verifyWebhookSignature(headers http.Header) error {
+	if p.webhookHash == "mock" {
+		return nil
+	}
+	if p.webhookHash == "" {
+		return fmt.Errorf("flutterwave webhook secret is not configured")
+	}
+	signature := headers.Get("verif-hash")
+	if signature == "" {
+		return fmt.Errorf("missing webhook signature header")
+	}
+	// Constant-time compare: a naive != leaks how many leading bytes of the
+	// secret matched through response-timing, letting an attacker recover
+	// it byte by byte.
+	if subtle.ConstantTimeCompare([]byte(signature), []byte(p.webhookHash)) != 1 {
+		return fmt.Errorf("invalid webhook signature")
+	}
+	return nil
+}
+
+// mapFlutterwaveStatus translates a Flutterwave charge/transfer status into
+// Fluxa's internal completed/failed vocabulary. Anything that isn't a
+// documented terminal status (e.g. "pending") is rejected outright, so an
+// in-flight transaction can never be mistaken for a finished one.
+func mapFlutterwaveStatus(providerStatus string) (string, error) {
+	switch providerStatus {
+	case "successful":
+		return "completed", nil
+	case "failed", "cancelled":
+		return "failed", nil
+	default:
+		return "", fmt.Errorf("unsupported or non-final webhook status: %q", providerStatus)
+	}
 }

@@ -113,6 +113,10 @@ func (f *fakeTransferRepo) ListByBatch(_ context.Context, batchID string) ([]*do
 func (f *fakeTransferRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
+func (f *fakeTransferRepo) ClaimForSubmission(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
 	return f.existing[txHash], nil
 }
@@ -131,7 +135,6 @@ func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transact
 	f.existing[tx.TxHash] = true
 	return nil
 }
-
 
 type fakeStellarClient struct {
 	loadAccount    func(accountID string) (horizon.Account, error)
@@ -159,6 +162,10 @@ func (f *fakeStellarClient) TransactionDetail(hash string) (horizon.Transaction,
 }
 
 func (f *fakeStellarClient) OperationsForTransaction(hash string) ([]operations.Operation, error) {
+	return nil, nil
+}
+
+func (m *fakeStellarClient) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
 	return nil, nil
 }
 

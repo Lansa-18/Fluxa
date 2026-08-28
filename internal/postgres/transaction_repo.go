@@ -155,6 +155,56 @@ func (r *TransactionRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempo
 	return tx, nil
 }
 
+// ClaimForSubmission atomically transitions a transaction from pending to
+// submitted. The WHERE clause makes this a single conditional UPDATE:
+// concurrent callers claiming the same id race on the same row, and only
+// one can ever win it. Deliberately strict (pending only, not also
+// submitted-but-unhashed): a row already sitting in `submitted` might be
+// actively owned by another in-flight worker that just hasn't written its
+// hash yet, so it must never be silently reclaimed here — only the
+// time-gated stuck-transaction recovery path (ResetStuckSubmittedToPending,
+// gated on age) may return such a row to pending.
+func (r *TransactionRepo) ClaimForSubmission(ctx context.Context, id string) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE transactions SET status = 'submitted' WHERE id = $1 AND status = 'pending'`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("claim transaction for submission: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("claim transaction for submission: %w", domain.ErrConcurrentUpdate)
+	}
+	return nil
+}
+
+// ResetStuckSubmittedToPending recovers a transaction that was claimed
+// (status=submitted) but never got a tx_hash recorded — the worker that
+// claimed it crashed before reaching the network, so nothing may have been
+// submitted. Gated on age (olderThan) so an in-flight worker still within
+// its normal processing window is never touched; only used by the
+// reconciliation sweep's stuck-transaction recovery, immediately before
+// re-enqueueing. A submitted transaction that does have a hash is
+// untouched by this — that one is only ever resolved by hash lookup.
+func (r *TransactionRepo) ResetStuckSubmittedToPending(ctx context.Context, id string, olderThan time.Duration) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE transactions
+		 SET status = 'pending'
+		 WHERE id = $1
+		   AND status = 'submitted'
+		   AND tx_hash IS NULL
+		   AND created_at < NOW() - $2::interval`,
+		id, olderThan.String(),
+	)
+	if err != nil {
+		return fmt.Errorf("reset stuck submitted transaction to pending: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("reset stuck submitted transaction to pending: %w", domain.ErrConcurrentUpdate)
+	}
+	return nil
+}
+
 func (r *TransactionRepo) UpdateStatus(ctx context.Context, id string, status domain.TransactionStatus, txHash string) error {
 	tID := tenant.IDFromContext(ctx)
 	query := `UPDATE transactions
@@ -358,7 +408,13 @@ func (r *TransactionRepo) GetConfirmedTxesForReconciliation(ctx context.Context,
 	return txs, rows.Err()
 }
 
-// GetStuckPendingTxes returns pending transactions older than the specified duration.
+// GetStuckPendingTxes returns transactions older than the specified duration
+// that never made it to the network: still pending (never claimed), or
+// submitted with no tx_hash recorded (a worker claimed it but crashed
+// before it could build/sign/submit). Both are safe to re-enqueue — neither
+// has a hash to look up on Horizon, so nothing may have reached the network.
+// A submitted transaction that does have a hash is deliberately excluded:
+// that one is only ever resolved by the hash-based reconciliation path.
 func (r *TransactionRepo) GetStuckPendingTxes(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error) {
 	rows, err := r.db.Query(ctx,
 		`SELECT id, tx_hash, type, status,
@@ -366,7 +422,7 @@ func (r *TransactionRepo) GetStuckPendingTxes(ctx context.Context, olderThan tim
 		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
 		        COALESCE(requeue_count, 0), reconciled_at
 		 FROM transactions
-		 WHERE status = 'pending'
+		 WHERE (status = 'pending' OR (status = 'submitted' AND tx_hash IS NULL))
 		   AND created_at < NOW() - $1::interval
 		 ORDER BY created_at ASC`,
 		olderThan.String(),
@@ -521,9 +577,12 @@ func (r *TransactionRepo) UpsertByTxHash(ctx context.Context, tx *domain.Transac
 	return nil
 }
 
-// GetPendingTxesForReconciliation returns pending transactions that have a Stellar
-// tx_hash stored and are older than olderThan. Uses SELECT FOR UPDATE SKIP LOCKED
-// so concurrent reconciler instances claim disjoint sets of rows without blocking.
+// GetPendingTxesForReconciliation returns pending or submitted transactions
+// that have a Stellar tx_hash stored and are older than olderThan —
+// including a transaction whose submission outcome was ambiguous (status
+// 'submitted', hash recorded, but neither confirmed nor failed yet). Uses
+// SELECT FOR UPDATE SKIP LOCKED so concurrent reconciler instances claim
+// disjoint sets of rows without blocking.
 func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error) {
 	dbTx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -537,7 +596,7 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 		        asset, amount, COALESCE(fee,'0'), fee_bps, tenant_id, created_at,
 		        COALESCE(requeue_count, 0), reconciled_at
 		 FROM transactions
-		 WHERE status = 'pending'
+		 WHERE status IN ('pending', 'submitted')
 		   AND tx_hash IS NOT NULL
 		   AND created_at < NOW() - $1::interval
 		 ORDER BY created_at ASC
@@ -580,12 +639,13 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 	return txs, nil
 }
 
-// UpdateTxConfirmed transitions a pending transaction to confirmed. The WHERE
-// guard on status = 'pending' prevents double-correction if two reconcilers race.
-// Returns domain.ErrConcurrentUpdate when the row was already claimed.
+// UpdateTxConfirmed transitions a pending or submitted transaction to
+// confirmed. The WHERE guard prevents double-correction if two reconcilers
+// (or a reconciler and the settlement engine itself) race. Returns
+// domain.ErrConcurrentUpdate when the row was already claimed.
 func (r *TransactionRepo) UpdateTxConfirmed(ctx context.Context, id, txHash string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE transactions SET status = 'confirmed', tx_hash = NULLIF($2, '') WHERE id = $1 AND status = 'pending'`,
+		`UPDATE transactions SET status = 'confirmed', tx_hash = NULLIF($2, '') WHERE id = $1 AND status IN ('pending', 'submitted')`,
 		id, txHash,
 	)
 	if err != nil {
@@ -597,12 +657,13 @@ func (r *TransactionRepo) UpdateTxConfirmed(ctx context.Context, id, txHash stri
 	return nil
 }
 
-// UpdateTxFailed transitions a pending transaction to failed. The WHERE guard
-// on status = 'pending' prevents double-correction if two reconcilers race.
-// Returns domain.ErrConcurrentUpdate when the row was already claimed.
+// UpdateTxFailed transitions a pending or submitted transaction to failed.
+// The WHERE guard prevents double-correction if two reconcilers (or a
+// reconciler and the settlement engine itself) race. Returns
+// domain.ErrConcurrentUpdate when the row was already claimed.
 func (r *TransactionRepo) UpdateTxFailed(ctx context.Context, id string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE transactions SET status = 'failed' WHERE id = $1 AND status = 'pending'`,
+		`UPDATE transactions SET status = 'failed' WHERE id = $1 AND status IN ('pending', 'submitted')`,
 		id,
 	)
 	if err != nil {

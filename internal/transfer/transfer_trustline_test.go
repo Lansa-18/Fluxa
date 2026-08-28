@@ -56,16 +56,18 @@ func (m *mockTxRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Tran
 func (m *mockTxRepo) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
 	return nil, nil
 }
+func (m *mockTxRepo) ClaimForSubmission(ctx context.Context, id string) error {
+	return nil
+}
 func (m *mockTxRepo) UpdateStatus(ctx context.Context, id string, status domain.TransactionStatus, txHash string) error {
+	return nil
+}
+func (m *mockTxRepo) UpsertByTxHash(ctx context.Context, tx *domain.Transaction) error {
 	return nil
 }
 func (m *mockTxRepo) ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
 	return nil, nil
 }
-func (m *mockTxRepo) UpsertByTxHash(_ context.Context, _ *domain.Transaction) error {
-	return nil
-}
-
 func (m *mockTxRepo) ExistsByTxHash(ctx context.Context, txHash string) (bool, error) {
 	return false, nil
 }
@@ -98,6 +100,10 @@ func (m *mockStellarClient) TransactionDetail(hash string) (horizon.Transaction,
 func (m *mockStellarClient) OperationsForTransaction(hash string) ([]operations.Operation, error) {
 	return nil, nil
 }
+func (*mockStellarClient) PaymentsForAccount(_ string, _ string, _ int) ([]operations.Payment, error) {
+	return nil, nil
+}
+
 func (m *mockStellarClient) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
 	return nil, nil
 }

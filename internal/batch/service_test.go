@@ -61,7 +61,15 @@ func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction,
 	return nil, domain.ErrTransactionNotFound
 }
 
+func (f *fakeTxRepo) ClaimForSubmission(_ context.Context, id string) error {
+	return nil
+}
+
 func (f *fakeTxRepo) UpdateStatus(_ context.Context, id string, status domain.TransactionStatus, txHash string) error {
+	return nil
+}
+
+func (f *fakeTxRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
 	return nil
 }
 
@@ -75,10 +83,6 @@ func (f *fakeTxRepo) ListByWallet(_ context.Context, walletID string, limit, off
 
 func (f *fakeTxRepo) ListByBatch(_ context.Context, batchID string) ([]*domain.Transaction, error) {
 	return f.byBatch[batchID], nil
-}
-
-func (f *fakeTxRepo) UpsertByTxHash(_ context.Context, _ *domain.Transaction) error {
-	return nil
 }
 
 func (f *fakeTxRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {

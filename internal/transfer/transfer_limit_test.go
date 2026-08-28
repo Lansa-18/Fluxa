@@ -46,6 +46,9 @@ func (m *limitMockTxRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.T
 func (m *limitMockTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
+func (m *limitMockTxRepo) ClaimForSubmission(_ context.Context, _ string) error {
+	return nil
+}
 func (m *limitMockTxRepo) UpdateStatus(_ context.Context, _ string, _ domain.TransactionStatus, _ string) error {
 	return nil
 }

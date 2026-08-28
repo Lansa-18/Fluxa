@@ -33,6 +33,23 @@ func (m *screeningMockTxRepo) CreateWithMonthlyLimit(_ context.Context, tx *doma
 	return m.Create(nil, tx)
 }
 
+// ClaimForSubmission mirrors the production guard: only a pending row can be
+// claimed, so a held transfer can never be picked up for settlement.
+func (m *screeningMockTxRepo) ClaimForSubmission(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, tx := range m.created {
+		if tx.ID == id {
+			if tx.Status != domain.StatusPending {
+				return domain.ErrConcurrentUpdate
+			}
+			tx.Status = domain.StatusSubmitted
+			return nil
+		}
+	}
+	return domain.ErrTransactionNotFound
+}
+
 func (m *screeningMockTxRepo) GetByID(_ context.Context, _ string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
