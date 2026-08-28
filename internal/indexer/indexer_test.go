@@ -117,6 +117,19 @@ func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (boo
 	return f.existing[txHash], nil
 }
 
+func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
+	if f.existing[tx.TxHash] {
+		return nil
+	}
+	f.created = append(f.created, tx)
+	f.existing[tx.TxHash] = true
+	return nil
+}
+
+func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
+	return 0, nil
+}
+
 type fakeStellarClient struct {
 	loadAccount    func(accountID string) (horizon.Account, error)
 	payments       func(accountID, cursor string, limit uint) ([]operations.Operation, error)
@@ -150,6 +163,10 @@ func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]op
 	if f.payments != nil {
 		return f.payments(accountID, cursor, limit)
 	}
+	return nil, nil
+}
+
+func (f *fakeStellarClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error) {
 	return nil, nil
 }
 
@@ -222,6 +239,114 @@ func TestSyncWallet_PersistsBalancesAndRecordsIncomingPayment(t *testing.T) {
 	tx := txRepo.created[0]
 	if tx.ToWallet != w.ID || tx.TxHash != "hash-1" || tx.Asset != "XLM" || !tx.Amount.Equal(decimal.NewFromFloat(42.5)) {
 		t.Fatalf("unexpected transaction: %+v", tx)
+	}
+}
+
+func TestSyncWallet_SetsTenantID(t *testing.T) {
+	tenantID := "tenant-abc"
+	w := &domain.Wallet{
+		ID:        "w-1",
+		PublicKey: "GBTEST...",
+		TenantID:  &tenantID,
+	}
+
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+
+	txRepo := newFakeTransferRepo()
+
+	op := incomingPaymentOp("op-1", "12345", "tx-hash-1", "GBTEST...", "10.5000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op}, nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v", err)
+	}
+
+	if len(txRepo.created) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(txRepo.created))
+	}
+
+	for _, tx := range txRepo.created {
+		if tx.TenantID == nil || *tx.TenantID != "tenant-abc" {
+			t.Fatalf("expected TenantID=tenant-abc, got %v", tx.TenantID)
+		}
+		if tx.ToWallet != "w-1" {
+			t.Fatalf("expected ToWallet=w-1, got %s", tx.ToWallet)
+		}
+	}
+}
+
+func TestSyncWallet_CursorAdvances(t *testing.T) {
+	w := &domain.Wallet{ID: "w-2", PublicKey: "GBTEST2..."}
+
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+
+	txRepo := newFakeTransferRepo()
+
+	op1 := incomingPaymentOp("p1", "1000", "hash-1", "GBTEST2...", "5.0000000")
+	op2 := incomingPaymentOp("p2", "2000", "hash-2", "GBTEST2...", "20.0000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op1, op2}, nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v", err)
+	}
+
+	if w.SyncCursor != "2000" {
+		t.Fatalf("expected sync_cursor=2000, got %s", w.SyncCursor)
+	}
+	if walletRepo.cursors["w-2"] != "2000" {
+		t.Fatalf("expected cursor update to 2000, got %s", walletRepo.cursors["w-2"])
+	}
+}
+
+func TestSyncWallet_NoPaymentsNoCursorUpdate(t *testing.T) {
+	w := &domain.Wallet{ID: "w-3", PublicKey: "GBTEST3...", SyncCursor: "old-cursor"}
+
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+
+	txRepo := newFakeTransferRepo()
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			return nil, nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v", err)
+	}
+
+	if w.SyncCursor != "old-cursor" {
+		t.Fatalf("expected cursor to remain old-cursor, got %s", w.SyncCursor)
 	}
 }
 

@@ -27,7 +27,7 @@ type Engine struct {
 	stellar      stellar.Client
 	signer       stellar.Signer
 	network      string
-	usdcIssuer   string
+	assetIssuers map[string]string
 	feeWallet    string
 }
 
@@ -37,17 +37,19 @@ func NewEngine(
 	feeSvc fees.Service,
 	stellarClient stellar.Client,
 	signer stellar.Signer,
-	network, usdcIssuer, feeWallet string,
+	network string,
+	assetIssuers map[string]string,
+	feeWallet string,
 ) *Engine {
 	return &Engine{
-		txRepo:     txRepo,
-		walletRepo: walletRepo,
-		feeSvc:     feeSvc,
-		stellar:    stellarClient,
-		signer:     signer,
-		network:    network,
-		usdcIssuer: usdcIssuer,
-		feeWallet:  feeWallet,
+		txRepo:       txRepo,
+		walletRepo:   walletRepo,
+		feeSvc:       feeSvc,
+		stellar:      stellarClient,
+		signer:       signer,
+		network:      network,
+		assetIssuers: assetIssuers,
+		feeWallet:    feeWallet,
 	}
 }
 
@@ -77,7 +79,10 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		return fmt.Errorf("load destination wallet: %w", err)
 	}
 
-	txAsset := e.buildAsset(tx.Asset)
+	txAsset, err := e.buildAsset(tx.Asset)
+	if err != nil {
+		return err
+	}
 	netAmount := tx.NetAmount()
 
 	ops := []txnbuild.Operation{
@@ -156,15 +161,15 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 	return nil
 }
 
-func (e *Engine) buildAsset(code string) txnbuild.Asset {
+func (e *Engine) buildAsset(code string) (txnbuild.Asset, error) {
 	if code == "XLM" {
-		return txnbuild.NativeAsset{}
+		return txnbuild.NativeAsset{}, nil
 	}
-	issuer := ""
-	if code == "USDC" {
-		issuer = e.usdcIssuer
+	issuer, ok := e.assetIssuers[code]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", domain.ErrInvalidAsset, code)
 	}
-	return txnbuild.CreditAsset{Code: code, Issuer: issuer}
+	return txnbuild.CreditAsset{Code: code, Issuer: issuer}, nil
 }
 
 func (e *Engine) networkPassphrase() string {

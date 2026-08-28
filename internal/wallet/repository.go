@@ -20,4 +20,3 @@ type Repository interface {
 	// UpdateSyncCursor advances the Horizon paging token used to resume incremental sync.
 	UpdateSyncCursor(ctx context.Context, walletID, cursor string) error
 }
-

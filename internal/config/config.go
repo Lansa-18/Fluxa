@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/spf13/viper"
 )
@@ -33,6 +34,9 @@ type Config struct {
 	ContractWalletSpendingLimit string
 	ContractWalletWindowSeconds int
 	ContractWalletRecoveryQuota int
+	YellowCardAPIKey            string
+	YellowCardWebhookKey        string
+	YellowCardSandbox           bool
 }
 
 func Load() (*Config, error) {
@@ -43,17 +47,17 @@ func Load() (*Config, error) {
 	viper.SetDefault("STELLAR_NETWORK", "testnet")
 	viper.SetDefault("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org")
 	viper.SetDefault("MIGRATIONS_PATH", "db/migrations")
-	viper.SetDefault("FX_SPREAD_BPS", "50") // default 0.5%
+	viper.SetDefault("FX_SPREAD_BPS", "50")
 	viper.SetDefault("JWT_SECRET", "fluxa-default-jwt-secret-key-change-in-production")
 	viper.SetDefault("SOROBAN_RPC_URL", "https://soroban-testnet.stellar.org")
 	viper.SetDefault("CONTRACT_WALLET_SPENDING_LIMIT", "1000")
 	viper.SetDefault("CONTRACT_WALLET_WINDOW_SECONDS", "86400")
 	viper.SetDefault("CONTRACT_WALLET_RECOVERY_THRESHOLD", "2")
+	viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
 
-	// Load .env file if present (dev convenience)
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
-	_ = viper.ReadInConfig() // ignore if not exist
+	_ = viper.ReadInConfig()
 
 	required := []string{"DATABASE_URL", "REDIS_URL", "MASTER_ENCRYPTION_KEY"}
 	for _, key := range required {
@@ -78,6 +82,8 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("a secure, high-entropy JWT_SECRET (min 32 bytes) must be explicitly configured in production")
 		}
 	}
+
+	ycSandbox, _ := strconv.ParseBool(viper.GetString("YELLOW_CARD_SANDBOX"))
 
 	return &Config{
 		Port:                        viper.GetString("PORT"),
@@ -105,5 +111,8 @@ func Load() (*Config, error) {
 		ContractWalletSpendingLimit: viper.GetString("CONTRACT_WALLET_SPENDING_LIMIT"),
 		ContractWalletWindowSeconds: viper.GetInt("CONTRACT_WALLET_WINDOW_SECONDS"),
 		ContractWalletRecoveryQuota: viper.GetInt("CONTRACT_WALLET_RECOVERY_THRESHOLD"),
+		YellowCardAPIKey:            viper.GetString("YELLOW_CARD_API_KEY"),
+		YellowCardWebhookKey:        viper.GetString("YELLOW_CARD_WEBHOOK_KEY"),
+		YellowCardSandbox:           ycSandbox,
 	}, nil
 }

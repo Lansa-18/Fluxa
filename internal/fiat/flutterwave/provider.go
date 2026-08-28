@@ -6,15 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/fiat"
 )
 
 type Provider struct {
-	secretKey    string
-	webhookHash  string
-	client       *http.Client
-	baseURL      string
+	secretKey   string
+	webhookHash string
+	client      *http.Client
+	baseURL     string
 }
 
 func NewProvider(secretKey, webhookHash string) *Provider {
@@ -26,19 +27,45 @@ func NewProvider(secretKey, webhookHash string) *Provider {
 	}
 }
 
-func (p *Provider) Deposit(ctx context.Context, req fiat.DepositRequest) (*fiat.DepositResponse, error) {
-	// If secretKey is mock, return a mock response
+func (p *Provider) Name() string {
+	return "flutterwave"
+}
+
+func (p *Provider) SupportedCountries() []string {
+	return []string{"NG", "GH", "KE", "ZA", "UG", "TZ"}
+}
+
+func (p *Provider) GetQuote(ctx context.Context, req fiat.QuoteRequest) (*fiat.FiatQuote, error) {
 	if p.secretKey == "mock" || p.secretKey == "" {
-		return &fiat.DepositResponse{
-			PaymentLink: fmt.Sprintf("https://mock.flutterwave.com/pay/%s", req.Reference),
-			Reference:   req.Reference,
+		rate := decimal.NewFromInt(1500)
+		usdcAmt := req.FiatAmount.Div(rate)
+		return &fiat.FiatQuote{
+			Provider:     "flutterwave",
+			FiatAmount:   req.FiatAmount,
+			FiatCurrency: req.FiatCurrency,
+			USDCAmount:   usdcAmt,
+			Rate:         rate,
+			Fee:          decimal.NewFromInt(0),
+			ExpiresAt:    time.Now().Add(30 * time.Second),
+		}, nil
+	}
+	return nil, fmt.Errorf("flutterwave: GetQuote not yet implemented for production")
+}
+
+func (p *Provider) InitiateDeposit(ctx context.Context, req fiat.DepositRequest) (*fiat.DepositInstruction, error) {
+	if p.secretKey == "mock" || p.secretKey == "" {
+		return &fiat.DepositInstruction{
+			ProviderRef: req.Reference,
+			Instructions: map[string]string{
+				"payment_link": fmt.Sprintf("https://mock.flutterwave.com/pay/%s", req.Reference),
+			},
 		}, nil
 	}
 
 	payload := map[string]interface{}{
-		"tx_ref": req.Reference,
-		"amount": req.FiatAmount.String(),
-		"currency": req.FiatCurrency,
+		"tx_ref":       req.Reference,
+		"amount":       req.FiatAmount.String(),
+		"currency":     req.FiatCurrency,
 		"redirect_url": "https://fluxa.io/payment/callback",
 		"customer": map[string]string{
 			"email": req.CustomerEmail,
@@ -71,27 +98,29 @@ func (p *Provider) Deposit(ctx context.Context, req fiat.DepositRequest) (*fiat.
 		return nil, err
 	}
 
-	return &fiat.DepositResponse{
-		PaymentLink: result.Data.Link,
-		Reference:   req.Reference,
+	return &fiat.DepositInstruction{
+		ProviderRef: req.Reference,
+		Instructions: map[string]string{
+			"payment_link": result.Data.Link,
+		},
 	}, nil
 }
 
-func (p *Provider) Withdraw(ctx context.Context, req fiat.WithdrawRequest) (*fiat.WithdrawResponse, error) {
+func (p *Provider) InitiateWithdrawal(ctx context.Context, req fiat.WithdrawalRequest) (*fiat.WithdrawalResult, error) {
 	if p.secretKey == "mock" || p.secretKey == "" {
-		return &fiat.WithdrawResponse{
-			Reference: req.Reference,
-			Status:    "pending",
+		return &fiat.WithdrawalResult{
+			ProviderRef: req.ProviderRef,
+			Status:      "pending",
 		}, nil
 	}
 
 	payload := map[string]interface{}{
-		"account_bank": req.AccountBank,
+		"account_bank":   req.AccountBank,
 		"account_number": req.AccountNumber,
-		"amount": req.FiatAmount.String(),
-		"currency": req.FiatCurrency,
-		"reference": req.Reference,
-		"narration": "Fluxa Withdrawal",
+		"amount":         req.FiatAmount.String(),
+		"currency":       req.FiatCurrency,
+		"reference":      req.ProviderRef,
+		"narration":      "Fluxa Withdrawal",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -121,14 +150,44 @@ func (p *Provider) Withdraw(ctx context.Context, req fiat.WithdrawRequest) (*fia
 		return nil, err
 	}
 
-	return &fiat.WithdrawResponse{
-		Reference: result.Data.Reference,
-		Status:    result.Data.Status,
+	return &fiat.WithdrawalResult{
+		ProviderRef: result.Data.Reference,
+		Status:      result.Data.Status,
 	}, nil
 }
 
-func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, signature string) (*fiat.RailEvent, error) {
-	// Verify signature
+func (p *Provider) GetStatus(ctx context.Context, providerRef string) (*fiat.RailEvent, error) {
+	httpReq, _ := http.NewRequestWithContext(ctx, "GET", p.baseURL+"/transfers/"+providerRef, nil)
+	httpReq.Header.Set("Authorization", "Bearer "+p.secretKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("flutterwave get status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status string `json:"status"`
+		Data   struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	evt := &fiat.RailEvent{
+		ProviderRef: providerRef,
+		Status:      "failed",
+	}
+	if result.Data.Status == "successful" {
+		evt.Status = "completed"
+	}
+	return evt, nil
+}
+
+func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, headers http.Header) (*fiat.RailEvent, error) {
+	signature := headers.Get("verif-hash")
 	if p.webhookHash != "" && p.webhookHash != "mock" {
 		if signature != p.webhookHash {
 			return nil, fmt.Errorf("invalid webhook signature")
@@ -138,10 +197,11 @@ func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, signature 
 	var data struct {
 		Event string `json:"event"`
 		Data  struct {
-			TxRef  string `json:"tx_ref"`
-			Status string `json:"status"`
-			Amount float64 `json:"amount"`
-			Reference string `json:"reference"`
+			TxRef     string  `json:"tx_ref"`
+			Status    string  `json:"status"`
+			Amount    float64 `json:"amount"`
+			Reference string  `json:"reference"`
+			Currency  string  `json:"currency"`
 		} `json:"data"`
 	}
 
@@ -150,28 +210,26 @@ func (p *Provider) HandleWebhook(ctx context.Context, payload []byte, signature 
 	}
 
 	evt := &fiat.RailEvent{
-		Reference: data.Data.TxRef,
-		Status:    "failed",
+		ProviderRef: data.Data.TxRef,
+		Status:      "failed",
 	}
-	if evt.Reference == "" {
-		evt.Reference = data.Data.Reference // Used in transfers
+	if evt.ProviderRef == "" {
+		evt.ProviderRef = data.Data.Reference
 	}
+	evt.Amount = decimal.NewFromFloat(data.Data.Amount)
+	evt.Currency = data.Data.Currency
 
 	if data.Data.Status == "successful" {
 		evt.Status = "completed"
 	}
 
-	if data.Event == "charge.completed" {
-		evt.Type = "deposit"
-	} else if data.Event == "transfer.completed" {
-		evt.Type = "withdraw"
-	} else {
-		// Mock testing override logic
-		if len(data.Event) > 0 {
-			evt.Type = data.Event // e.g. "deposit", "withdraw"
-		} else {
-			evt.Type = "deposit" // default fallback
-		}
+	switch data.Event {
+	case "charge.completed":
+		evt.Type = fiat.EventDepositConfirmed
+	case "transfer.completed":
+		evt.Type = fiat.EventWithdrawalSent
+	default:
+		evt.Type = data.Event
 	}
 
 	return evt, nil
