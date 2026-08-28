@@ -258,6 +258,7 @@ func main() {
 			},
 			"stellar": server.HTTPDependencyCheck(cfg.StellarHorizonURL),
 		},
+		orgRepo,
 	)
 
 	quit := make(chan os.Signal, 1)

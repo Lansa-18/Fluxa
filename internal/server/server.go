@@ -52,6 +52,7 @@ func New(
 	jwtSecret []byte,
 	port string,
 	healthChecks map[string]DependencyCheck,
+	membershipValidator MembershipValidator,
 ) *Server {
 	r := chi.NewRouter()
 
@@ -73,7 +74,7 @@ func New(
 
 		// Authenticated endpoints
 		r.Group(func(r chi.Router) {
-			r.Use(AuthMiddleware(apiKeyRepo, jwtSecret))
+			r.Use(AuthMiddleware(apiKeyRepo, jwtSecret, membershipValidator))
 			r.Use(RateLimit(100, 200))
 
 			r.Get("/usage", func(w http.ResponseWriter, r *http.Request) {
