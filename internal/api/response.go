@@ -37,22 +37,50 @@ func NotFound(w http.ResponseWriter, message string) {
 	Error(w, http.StatusNotFound, "NOT_FOUND", message)
 }
 
+func UnprocessableEntity(w http.ResponseWriter, code, message string) {
+	Error(w, http.StatusUnprocessableEntity, code, message)
+}
+
 func InternalError(w http.ResponseWriter, err error) {
 	Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 }
 
 func HandleDomainError(w http.ResponseWriter, err error) {
+	var noTrustlineErr *domain.ErrNoTrustline
+	if errors.As(err, &noTrustlineErr) {
+		UnprocessableEntity(w, "MISSING_TRUSTLINE", err.Error())
+		return
+	}
+
 	switch {
 	case errors.Is(err, domain.ErrWalletNotFound), errors.Is(err, domain.ErrTransactionNotFound),
+
 		errors.Is(err, domain.ErrWebhookNotFound), errors.Is(err, domain.ErrWebhookDeliveryNotFound),
-		errors.Is(err, domain.ErrFiatDepositNotFound), errors.Is(err, domain.ErrFiatWithdrawalNotFound):
+		errors.Is(err, domain.ErrBatchNotFound), errors.Is(err, domain.ErrScheduleNotFound),
+		errors.Is(err, domain.ErrUserNotFound), errors.Is(err, domain.ErrOrgMemberNotFound),
+		errors.Is(err, domain.ErrInviteNotFound):
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
-		errors.Is(err, domain.ErrFeeScheduleNotFound), errors.Is(err, domain.ErrFiatProviderNotFound),
-		errors.Is(err, domain.ErrFiatQuoteExpired), errors.Is(err, domain.ErrUnsupportedCountry),
-		errors.Is(err, domain.ErrFiatWebhookVerification):
+		errors.Is(err, domain.ErrFeeScheduleNotFound),
+		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty),
+		errors.Is(err, domain.ErrWalletLimitReached), errors.Is(err, domain.ErrTransferLimitReached),
+		errors.Is(err, domain.ErrWebhookLimitReached):
 		BadRequest(w, err.Error())
+	case errors.Is(err, domain.ErrUserAlreadyExists):
+		Error(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, domain.ErrInvalidCredentials):
+		Error(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+	case errors.Is(err, domain.ErrForbidden):
+		Error(w, http.StatusForbidden, "FORBIDDEN", err.Error())
+	case errors.Is(err, domain.ErrQuoteExpired):
+		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())
+	case errors.Is(err, domain.ErrQuoteAlreadyUsed):
+		UnprocessableEntity(w, "QUOTE_ALREADY_USED", err.Error())
+	case errors.Is(err, domain.ErrInsufficientSweepableBalance):
+		Error(w, http.StatusBadRequest, "INSUFFICIENT_SWEEPABLE_BALANCE", err.Error())
+	case errors.Is(err, domain.ErrTreasuryConfigNotFound):
+		NotFound(w, err.Error())
 	default:
 		InternalError(w, err)
 	}

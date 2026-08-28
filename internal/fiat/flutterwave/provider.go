@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/fiat"
-	"github.com/shopspring/decimal"
 )
 
 type Provider struct {

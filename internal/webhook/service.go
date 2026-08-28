@@ -23,12 +23,13 @@ type Repository interface {
 	Create(ctx context.Context, ep *domain.WebhookEndpoint) error
 	GetByID(ctx context.Context, id string) (*domain.WebhookEndpoint, error)
 	List(ctx context.Context, tenantID *string) ([]*domain.WebhookEndpoint, error)
-	Delete(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string, tenantID *string) error
 	ListActiveByEvent(ctx context.Context, eventType string) ([]*domain.WebhookEndpoint, error)
 	CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error
 	UpdateDelivery(ctx context.Context, d *domain.WebhookDelivery) error
-	GetDeliveryByID(ctx context.Context, id string) (*domain.WebhookDelivery, error)
-	ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error)
+	GetDeliveryByID(ctx context.Context, id string, tenantID *string) (*domain.WebhookDelivery, error)
+	ListDeliveries(ctx context.Context, endpointID string, limit, offset int, tenantID *string) ([]*domain.WebhookDelivery, error)
+	CountByTenant(ctx context.Context, tenantID string) (int, error)
 }
 
 // Service exposes webhook management and dispatch operations.
@@ -41,30 +42,60 @@ type Service interface {
 	Deliver(ctx context.Context, deliveryID string) error
 }
 
-type service struct {
-	repo   Repository
-	queue  *queue.Client
-	client *http.Client
+type TenantGetter interface {
+	GetByID(ctx context.Context, id string) (*domain.Tenant, error)
 }
 
-func NewService(repo Repository, q *queue.Client) Service {
-	return &service{
-		repo:   repo,
-		queue:  q,
-		client: &http.Client{Timeout: 10 * time.Second},
+type service struct {
+	repo       Repository
+	queue      *queue.Client
+	client     *http.Client
+	tenantRepo TenantGetter
+
+	// allowPrivateNetworks disables SSRF destination checks. It only exists
+	// so tests can target httptest servers on loopback addresses; it must
+	// never be set outside of tests and NewService never sets it.
+	allowPrivateNetworks bool
+}
+
+func NewService(repo Repository, q *queue.Client, tenantRepo ...TenantGetter) Service {
+	s := &service{
+		repo:  repo,
+		queue: q,
 	}
+	s.client = s.newSafeHTTPClient()
+	if len(tenantRepo) > 0 {
+		s.tenantRepo = tenantRepo[0]
+	}
+	return s
 }
 
 func (s *service) Register(ctx context.Context, url string, events []string) (*domain.WebhookEndpoint, error) {
-	secret, err := generateSecret()
-	if err != nil {
-		return nil, fmt.Errorf("generate webhook secret: %w", err)
+	if err := s.validateWebhookURL(ctx, url); err != nil {
+		return nil, err
 	}
 
 	tenantID := tenant.IDFromContext(ctx)
 	var tenantPtr *string
 	if tenantID != "" {
 		tenantPtr = &tenantID
+		if s.tenantRepo != nil {
+			t, err := s.tenantRepo.GetByID(ctx, tenantID)
+			if err == nil && t != nil {
+				limit := t.GetWebhookLimit()
+				if limit > 0 {
+					count, err := s.repo.CountByTenant(ctx, tenantID)
+					if err == nil && count >= limit {
+						return nil, domain.ErrWebhookLimitReached
+					}
+				}
+			}
+		}
+	}
+
+	secret, err := generateSecret()
+	if err != nil {
+		return nil, fmt.Errorf("generate webhook secret: %w", err)
 	}
 
 	if events == nil {
@@ -97,14 +128,24 @@ func (s *service) List(ctx context.Context) ([]*domain.WebhookEndpoint, error) {
 }
 
 func (s *service) Delete(ctx context.Context, id string) error {
-	return s.repo.Delete(ctx, id)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	return s.repo.Delete(ctx, id, tenantPtr)
 }
 
 func (s *service) ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	return s.repo.ListDeliveries(ctx, endpointID, limit, offset)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	return s.repo.ListDeliveries(ctx, endpointID, limit, offset, tenantPtr)
 }
 
 // Dispatch creates delivery records for all active endpoints subscribed to eventType,
@@ -156,6 +197,12 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	delivery.AttemptCount++
 	delivery.LastAttempt = &now
 
+	if err := s.validateWebhookURL(ctx, ep.URL); err != nil {
+		delivery.Status = domain.DeliveryFailed
+		_ = s.repo.UpdateDelivery(ctx, delivery)
+		return fmt.Errorf("validate webhook destination: %w", err)
+	}
+
 	sig := sign(ep.Secret, delivery.Payload)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewReader(delivery.Payload))
@@ -191,7 +238,12 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 }
 
 func (s *service) loadDelivery(ctx context.Context, deliveryID string) (*domain.WebhookDelivery, *domain.WebhookEndpoint, error) {
-	delivery, err := s.repo.GetDeliveryByID(ctx, deliveryID)
+	tenantID := tenant.IDFromContext(ctx)
+	var tenantPtr *string
+	if tenantID != "" {
+		tenantPtr = &tenantID
+	}
+	delivery, err := s.repo.GetDeliveryByID(ctx, deliveryID, tenantPtr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load delivery: %w", err)
 	}

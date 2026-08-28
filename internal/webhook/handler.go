@@ -21,10 +21,10 @@ func NewHandler(svc Service) *Handler {
 
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.register)
-		r.Get("/", h.list)
-		r.Delete("/{id}", h.delete)
-		r.Get("/{id}/deliveries", h.listDeliveries)
+		r.Post("/", h.Register)
+		r.Get("/", h.List)
+		r.Delete("/{id}", h.Delete)
+		r.Get("/{id}/deliveries", h.ListDeliveries)
 	}
 }
 
@@ -84,7 +84,7 @@ func toDeliveryResponse(d *domain.WebhookDelivery) deliveryResponse {
 	return r
 }
 
-func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		api.BadRequest(w, "invalid request body")
@@ -104,7 +104,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusCreated, toEndpointResponse(ep, true))
 }
 
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	endpoints, err := h.svc.List(r.Context())
 	if err != nil {
 		api.InternalError(w, err)
@@ -118,7 +118,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	api.JSON(w, http.StatusOK, map[string]interface{}{"endpoints": resp})
 }
 
-func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		api.HandleDomainError(w, err)
@@ -127,7 +127,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) listDeliveries(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))

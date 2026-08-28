@@ -8,6 +8,7 @@ import (
 	"github.com/fluxa/fluxa/internal/api"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
 )
 
@@ -21,26 +22,19 @@ func NewHandler(svc Service) *Handler {
 
 func (h *Handler) DepositRoutes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.handleDeposit)
+		r.Post("/fiat", h.handleDeposit)
 	}
 }
 
 func (h *Handler) WithdrawRoutes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.handleWithdrawal)
+		r.Post("/fiat", h.handleWithdrawal)
 	}
 }
 
 func (h *Handler) WebhookRoutes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Post("/{provider}", h.handleWebhook)
-	}
-}
-
-func (h *Handler) FiatRoutes() func(r chi.Router) {
-	return func(r chi.Router) {
-		r.Post("/deposit", h.handleDepositV2)
-		r.Post("/withdraw", h.handleWithdrawalV2)
 	}
 }
 
@@ -54,24 +48,24 @@ type depositReq struct {
 func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
+		api.BadRequest(w, "wallet id is required")
 		return
 	}
 
 	var req depositReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		api.BadRequest(w, "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		api.BadRequest(w, err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
+		api.BadRequest(w, "invalid amount")
 		return
 	}
 
@@ -86,51 +80,7 @@ func (h *Handler) handleDeposit(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateDeposit(r.Context(), dr)
 	if err != nil {
-		api.InternalError(w, err)
-		return
-	}
-
-	api.JSON(w, http.StatusOK, resp)
-}
-
-type depositV2Req struct {
-	WalletID string `json:"wallet_id" validate:"required,uuid"`
-	Amount   string `json:"amount" validate:"required"`
-	Currency string `json:"currency" validate:"required"`
-	Country  string `json:"country" validate:"required"`
-	Email    string `json:"email" validate:"required,email"`
-	Name     string `json:"name" validate:"required"`
-}
-
-func (h *Handler) handleDepositV2(w http.ResponseWriter, r *http.Request) {
-	var req depositV2Req
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
-		return
-	}
-
-	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-		return
-	}
-
-	amount, err := decimal.NewFromString(req.Amount)
-	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
-		return
-	}
-
-	dr := DepositRequest{
-		WalletID:      req.WalletID,
-		Reference:     "DEP-" + uuid.New().String()[:8],
-		FiatAmount:    amount,
-		FiatCurrency:  req.Currency,
-		CustomerEmail: req.Email,
-		CustomerName:  req.Name,
-	}
-
-	resp, err := h.svc.InitiateDeposit(r.Context(), dr)
-	if err != nil {
+		log.Error().Err(err).Str("wallet_id", walletID).Msg("initiate deposit failed")
 		api.InternalError(w, err)
 		return
 	}
@@ -148,24 +98,24 @@ type withdrawReq struct {
 func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 	walletID := chi.URLParam(r, "id")
 	if walletID == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "wallet id is required")
+		api.BadRequest(w, "wallet id is required")
 		return
 	}
 
 	var req withdrawReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
+		api.BadRequest(w, "invalid request body")
 		return
 	}
 
 	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		api.BadRequest(w, err.Error())
 		return
 	}
 
 	amount, err := decimal.NewFromString(req.Amount)
 	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
+		api.BadRequest(w, "invalid amount")
 		return
 	}
 
@@ -180,51 +130,7 @@ func (h *Handler) handleWithdrawal(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.svc.InitiateWithdrawal(r.Context(), wr)
 	if err != nil {
-		api.InternalError(w, err)
-		return
-	}
-
-	api.JSON(w, http.StatusOK, resp)
-}
-
-type withdrawV2Req struct {
-	WalletID      string `json:"wallet_id" validate:"required,uuid"`
-	Amount        string `json:"amount" validate:"required"`
-	Currency      string `json:"currency" validate:"required"`
-	Country       string `json:"country" validate:"required"`
-	AccountBank   string `json:"account_bank" validate:"required"`
-	AccountNumber string `json:"account_number" validate:"required"`
-}
-
-func (h *Handler) handleWithdrawalV2(w http.ResponseWriter, r *http.Request) {
-	var req withdrawV2Req
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
-		return
-	}
-
-	if err := api.Validate(req); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-		return
-	}
-
-	amount, err := decimal.NewFromString(req.Amount)
-	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid amount")
-		return
-	}
-
-	wr := WithdrawRequest{
-		WalletID:      req.WalletID,
-		Reference:     "WIT-" + uuid.New().String()[:8],
-		FiatAmount:    amount,
-		FiatCurrency:  req.Currency,
-		AccountBank:   req.AccountBank,
-		AccountNumber: req.AccountNumber,
-	}
-
-	resp, err := h.svc.InitiateWithdrawal(r.Context(), wr)
-	if err != nil {
+		log.Error().Err(err).Str("wallet_id", walletID).Msg("initiate withdrawal failed")
 		api.InternalError(w, err)
 		return
 	}
@@ -235,23 +141,23 @@ func (h *Handler) handleWithdrawalV2(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 	if provider == "" {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "provider is required")
+		api.BadRequest(w, "provider is required")
 		return
 	}
 
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", "read payload error")
+		api.BadRequest(w, "read payload error")
 		return
 	}
 
-	headers := make(map[string]string)
-	for k := range r.Header {
-		headers[k] = r.Header.Get(k)
-	}
+	// Flutterwave sends signature in "verif-hash" header
+	signature := r.Header.Get("verif-hash")
 
-	if err := h.svc.HandleWebhook(r.Context(), provider, payload, headers); err != nil {
-		api.Error(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+	if err := h.svc.HandleWebhook(r.Context(), payload, signature); err != nil {
+		log.Error().Err(err).Str("provider", provider).Msg("webhook handling failed")
+		// Do not return 500 so provider won't keep retrying if it's a fatal validation error
+		api.BadRequest(w, "webhook validation failed")
 		return
 	}
 

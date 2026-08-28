@@ -2,6 +2,7 @@ package domain
 
 import (
 	"time"
+
 	"github.com/shopspring/decimal"
 )
 
@@ -15,33 +16,29 @@ const (
 	StatusFailed               TransactionStatus = "failed"
 	StatusReconciliationFailed TransactionStatus = "reconciliation_failed"
 
-	TypeTransfer      TransactionType = "transfer"
-	TypeConversion    TransactionType = "conversion"
-	TypeFunding       TransactionType = "funding"
-	TypeFiatDeposit   TransactionType = "fiat_deposit"
-	TypeFiatWithdrawal TransactionType = "fiat_withdrawal"
+	TypeTransfer   TransactionType = "transfer"
+	TypeConversion TransactionType = "conversion"
+	TypeFunding    TransactionType = "funding"
 )
 
 type Transaction struct {
-	ID              string
-	TxHash          string
-	Type            TransactionType
-	Status          TransactionStatus
-	FromWallet      string
-	ToWallet        string
-	Asset           string
-	Amount          decimal.Decimal
-	Fee             decimal.Decimal
-	FeeBps          int
-	TenantID        *string
-	CreatedAt       time.Time
-	ReconciledAt    *time.Time
-	RequeueCount    int
-	FiatRail        *string
-	FiatProviderRef *string
-	FiatStatus      *string
-	LocalCurrency   *string
-	LocalAmount     *decimal.Decimal
+	ID             string
+	TxHash         string
+	Type           TransactionType
+	Status         TransactionStatus
+	FromWallet     string
+	ToWallet       string
+	Asset          string
+	Amount         decimal.Decimal
+	Fee            decimal.Decimal
+	FeeBps         int
+	TenantID       *string
+	BatchID        *string
+	Reference      string
+	CreatedAt      time.Time
+	ReconciledAt   *time.Time
+	RequeueCount   int
+	IdempotencyKey string
 }
 
 func (t *Transaction) NetAmount() decimal.Decimal {

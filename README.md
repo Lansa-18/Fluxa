@@ -1,4 +1,6 @@
 # Fluxa
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+
 
 **Cross-border payment infrastructure for emerging markets.**
 
@@ -15,14 +17,17 @@ Fluxa is a programmable payments API built on the [Stellar](https://stellar.org)
 
 ## What it does
 
-- **Wallets** — create Stellar accounts with AES-256-GCM encrypted secrets; never expose raw keys
-- **Transfers** — async payment submission with queue-backed retry and status polling
-- **FX / Conversion** — quote and execute cross-asset swaps via Stellar DEX path payments
-- **Settlement** — background worker submits transactions to Stellar, handles retries, confirms on-chain
-- **Ledger indexer** — streams Horizon events to keep local state in sync
-- **Multi-tenant** — API key auth; individual developers and business organizations each get scoped access
-- **Webhooks** — signed delivery of payment events to developer endpoints
-- **Sandbox mode** — `sk_test_` keys route to Stellar testnet for safe integration testing
+- ✅ **Wallets** — create Stellar accounts with AES-256-GCM encrypted secrets; never expose raw keys
+- ✅ **Transfers** — async payment submission with queue-backed retry and status polling
+- ✅ **FX / Conversion** — quote and execute cross-asset swaps via Stellar DEX path payments
+- ✅ **Settlement** — background worker submits transactions to Stellar, handles retries, confirms on-chain
+- ✅ **Ledger indexer** — streams Horizon events to keep local state in sync
+- ✅ **Multi-tenant** — API key + JWT auth; individual developers and business organizations each get scoped access
+- ✅ **Webhooks** — signed delivery of payment events to developer endpoints
+- 🔜 **Sandbox mode** — `sk_test_` keys route to Stellar testnet for safe integration testing
+- ✅ **Recurring payouts** — scheduled transfers with daily/weekly/monthly cadence
+- ✅ **Fiat rails** — deposit/withdrawal via Flutterwave integration
+- ✅ **Organization management** — invite members, role-based access control (owner/admin/dev/viewer)
 
 ---
 
@@ -84,6 +89,8 @@ fluxa/
 │   ├── queue/                # Asynq client + task type definitions
 │   ├── wallet/               # Wallet service + HTTP handler
 │   ├── transfer/             # Transfer service + HTTP handler
+│   ├── batch/                # Batch transfers + CSV export, reuses transfer settlement
+│   ├── schedule/             # Recurring payouts + Asynq periodic task
 │   ├── fx/                   # FX service + rate providers + HTTP handler
 │   ├── fees/                 # Fee calculation and collection
 │   ├── settlement/           # Settlement engine + Asynq task handler
@@ -94,6 +101,8 @@ fluxa/
 │   ├── auth/                 # User registration, login, JWT
 │   ├── org/                  # Organization members, roles
 │   ├── fiat/                 # Fiat rail abstraction + provider adapters
+│   ├── alerting/             # Alerting client for platform notifications
+│   ├── tenant/               # Tenant context helpers
 │   ├── server/               # Chi router setup, middleware
 │   └── api/                  # Shared request validation + response helpers
 └── db/
@@ -109,6 +118,10 @@ fluxa/
 - Go 1.22+
 - PostgreSQL 15+
 - Redis 7+
+
+The repository root is a Go backend workspace. It does not require root-level
+Node.js, TypeScript, Prisma, or BullMQ tooling to build or run the API and
+worker.
 
 ### 1. Clone and install
 
@@ -161,7 +174,7 @@ make run-worker
 
 ## API Reference
 
-All endpoints are prefixed `/v1`. Auth: `Authorization: Bearer <api_key>`. Errors:
+All endpoints are prefixed `/v1`. Auth: `Authorization: Bearer <api_key_or_jwt>`. Errors:
 
 ```json
 { "error": { "code": "WALLET_NOT_FOUND", "message": "wallet not found" } }
@@ -172,6 +185,7 @@ All endpoints are prefixed `/v1`. Auth: `Authorization: Bearer <api_key>`. Error
 ```http
 POST /v1/auth/register     Create account (individual or organization)
 POST /v1/auth/login        Login — returns JWT
+POST /v1/auth/refresh      Refresh access token
 POST /v1/keys              Create API key  →  sk_live_... or sk_test_...
 GET  /v1/keys              List keys (prefix only, never raw)
 DELETE /v1/keys/:id        Revoke key
@@ -181,7 +195,6 @@ DELETE /v1/keys/:id        Revoke key
 
 ```http
 POST /v1/wallets           Create wallet — returns public key only
-GET  /v1/wallets/:id       Get wallet
 GET  /v1/wallets/:id/balances   Live balances from Horizon (all assets)
 POST /v1/wallets/:id/trustlines  Add Stellar trustline for a new asset
 ```
@@ -193,9 +206,24 @@ POST /v1/transfers         Initiate transfer (202 Accepted — async)
 GET  /v1/transfers/:id     Poll status
 GET  /v1/transfers         List (filter by wallet, status, date)
 POST /v1/transfers/batch   Up to 100 transfers in one call
+GET  /v1/transfers/batch/:batchId          Batch status with per-transfer breakdown
+GET  /v1/transfers/batch/:batchId/export   CSV download of batch results
 ```
 
 **Status flow:** `pending` → `confirmed` | `failed`
+
+**Batch status** is derived live from its linked transactions: `pending` → `processing` → `partial` | `completed` | `failed`.
+
+### Scheduled Payouts
+
+```http
+POST   /v1/schedules       Create a recurring transfer (daily | weekly | monthly)
+GET    /v1/schedules       List schedules
+PATCH  /v1/schedules/:id   Pause, resume, or update amount/frequency/end_date
+DELETE /v1/schedules/:id   Cancel a schedule
+```
+
+A background worker checks for due schedules every minute and enqueues a normal transfer for each one — a paused schedule is skipped until resumed.
 
 ### FX
 
@@ -216,11 +244,33 @@ GET    /v1/webhooks/:id/deliveries  Delivery log
 
 **Event types:** `transfer.initiated` · `transfer.settled` · `transfer.failed` · `wallet.funded` · `conversion.completed`
 
-### Usage
+### Fees
 
 ```http
-GET /v1/usage              Current period: request count, transfer volume, rate limit
-GET /v1/fees               Your fee schedule
+GET /v1/fees               Your fee schedule (transfer/conversion fee rates)
+```
+
+### Organization
+
+```http
+POST /v1/org/members/invite     Invite member to organization
+GET  /v1/org/members            List organization members
+PATCH  /v1/org/members/{userId}   Update member role
+DELETE /v1/org/members/{userId}   Remove member
+POST /v1/org/invites/accept     Accept organization invite (public)
+```
+
+### Fiat Rails
+
+```http
+POST /v1/wallets/{id}/deposit/fiat   Initiate fiat deposit
+POST /v1/wallets/{id}/withdraw/fiat  Initiate fiat withdrawal
+POST /v1/webhooks/fiat/{provider}   Fiat provider webhook receiver
+```
+
+### Health
+
+```http
 GET /health                Health check
 ```
 

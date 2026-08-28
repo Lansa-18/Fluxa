@@ -13,16 +13,28 @@ import (
 )
 
 type Handler struct {
-	svc Service
+	svc  Service
+	idem func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// WithIdempotency attaches the idempotency-key middleware to the
+// state-mutating route (POST /) only; reads (GET /{id}) are unaffected.
+func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
+	h.idem = mw
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
-		r.Post("/", h.initiateTransfer)
+		post := r.Post
+		if h.idem != nil {
+			post = r.With(h.idem).Post
+		}
+		post("/", h.initiateTransfer)
 		r.Get("/{id}", h.getTransaction)
 	}
 }
@@ -89,7 +101,7 @@ func (h *Handler) initiateTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.svc.InitiateTransfer(r.Context(), req.FromWalletID, req.ToWalletID, req.Asset, amount)
+	tx, err := h.svc.InitiateTransferIdempotent(r.Context(), req.FromWalletID, req.ToWalletID, req.Asset, amount, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		api.HandleDomainError(w, err)
 		return

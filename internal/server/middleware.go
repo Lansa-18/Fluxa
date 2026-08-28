@@ -4,7 +4,11 @@ import (
 	"net/http"
 	"time"
 
+	"strings"
+
 	"github.com/fluxa/fluxa/internal/apikey"
+	"github.com/fluxa/fluxa/internal/auth"
+	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/go-chi/chi/v5/middleware"
@@ -53,7 +57,30 @@ func recoverer(next http.Handler) http.Handler {
 	})
 }
 
-func AuthMiddleware(repo *postgres.APIKeyRepo) func(http.Handler) http.Handler {
+func CORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-Request-ID")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -62,12 +89,24 @@ func AuthMiddleware(repo *postgres.APIKeyRepo) func(http.Handler) http.Handler {
 				return
 			}
 
-			rawKey := authHeader[7:]
-			hash := apikey.Hash(rawKey)
+			rawToken := authHeader[7:]
 
+			// Check if token is JWT (contains 2 dots)
+			if strings.Count(rawToken, ".") == 2 {
+				claims, err := auth.ParseToken(rawToken, jwtSecret)
+				if err == nil && claims.TokenType == "access" {
+					ctx := tenant.WithID(r.Context(), claims.TenantID)
+					ctx = tenant.WithUser(ctx, claims.Sub, claims.Role)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			// Fallback to API Key auth
+			hash := apikey.Hash(rawToken)
 			key, err := repo.GetByHash(r.Context(), hash)
 			if err != nil || key == nil {
-				http.Error(w, "invalid api key", http.StatusUnauthorized)
+				http.Error(w, "invalid api key or authentication token", http.StatusUnauthorized)
 				return
 			}
 			if key.RevokedAt != nil {
@@ -75,12 +114,44 @@ func AuthMiddleware(repo *postgres.APIKeyRepo) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Update last_used_at
 			_ = repo.UpdateLastUsed(r.Context(), key.ID)
 
-			// Attach tenant
-			r = r.WithContext(tenant.WithID(r.Context(), key.TenantID))
-			next.ServeHTTP(w, r)
+			ctx := tenant.WithID(r.Context(), key.TenantID)
+			ctx = tenant.WithUser(ctx, "", domain.RoleAdmin)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
+
+func RequireRole(allowedRoles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role := tenant.RoleFromContext(r.Context())
+			if role == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			for _, allowed := range allowedRoles {
+				if role == allowed {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
+			http.Error(w, "insufficient permissions", http.StatusForbidden)
+		})
+	}
+}
+
+func RequireNotViewer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := tenant.RoleFromContext(r.Context())
+		if role == domain.RoleViewer {
+			http.Error(w, "viewer role is read-only", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+

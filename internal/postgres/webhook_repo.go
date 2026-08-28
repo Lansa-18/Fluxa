@@ -7,6 +7,7 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -77,8 +78,14 @@ func (r *WebhookRepo) List(ctx context.Context, tenantID *string) ([]*domain.Web
 	return endpoints, rows.Err()
 }
 
-func (r *WebhookRepo) Delete(ctx context.Context, id string) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1`, id)
+func (r *WebhookRepo) Delete(ctx context.Context, id string, tenantID *string) error {
+	var tag pgconn.CommandTag
+	var err error
+	if tenantID != nil {
+		tag, err = r.db.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1 AND tenant_id = $2`, id, *tenantID)
+	} else {
+		tag, err = r.db.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1`, id)
+	}
 	if err != nil {
 		return fmt.Errorf("delete webhook endpoint: %w", err)
 	}
@@ -137,15 +144,27 @@ func (r *WebhookRepo) UpdateDelivery(ctx context.Context, d *domain.WebhookDeliv
 	return nil
 }
 
-func (r *WebhookRepo) GetDeliveryByID(ctx context.Context, id string) (*domain.WebhookDelivery, error) {
+func (r *WebhookRepo) GetDeliveryByID(ctx context.Context, id string, tenantID *string) (*domain.WebhookDelivery, error) {
 	d := &domain.WebhookDelivery{}
 	var evType, status string
-	err := r.db.QueryRow(ctx,
-		`SELECT id, endpoint_id, event_type, payload, status, response_code, attempt_count, last_attempt, created_at
-		 FROM webhook_deliveries WHERE id = $1`,
-		id,
-	).Scan(&d.ID, &d.EndpointID, &evType, &d.Payload, &status,
-		&d.ResponseCode, &d.AttemptCount, &d.LastAttempt, &d.CreatedAt)
+	var err error
+	if tenantID != nil {
+		err = r.db.QueryRow(ctx,
+			`SELECT d.id, d.endpoint_id, d.event_type, d.payload, d.status, d.response_code, d.attempt_count, d.last_attempt, d.created_at
+			 FROM webhook_deliveries d
+			 JOIN webhook_endpoints e ON d.endpoint_id = e.id
+			 WHERE d.id = $1 AND e.tenant_id = $2`,
+			id, *tenantID,
+		).Scan(&d.ID, &d.EndpointID, &evType, &d.Payload, &status,
+			&d.ResponseCode, &d.AttemptCount, &d.LastAttempt, &d.CreatedAt)
+	} else {
+		err = r.db.QueryRow(ctx,
+			`SELECT id, endpoint_id, event_type, payload, status, response_code, attempt_count, last_attempt, created_at
+			 FROM webhook_deliveries WHERE id = $1`,
+			id,
+		).Scan(&d.ID, &d.EndpointID, &evType, &d.Payload, &status,
+			&d.ResponseCode, &d.AttemptCount, &d.LastAttempt, &d.CreatedAt)
+	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrWebhookDeliveryNotFound
@@ -157,13 +176,26 @@ func (r *WebhookRepo) GetDeliveryByID(ctx context.Context, id string) (*domain.W
 	return d, nil
 }
 
-func (r *WebhookRepo) ListDeliveries(ctx context.Context, endpointID string, limit, offset int) ([]*domain.WebhookDelivery, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, endpoint_id, event_type, payload, status, response_code, attempt_count, last_attempt, created_at
-		 FROM webhook_deliveries WHERE endpoint_id = $1
-		 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-		endpointID, limit, offset,
-	)
+func (r *WebhookRepo) ListDeliveries(ctx context.Context, endpointID string, limit, offset int, tenantID *string) ([]*domain.WebhookDelivery, error) {
+	var rows pgx.Rows
+	var err error
+	if tenantID != nil {
+		rows, err = r.db.Query(ctx,
+			`SELECT d.id, d.endpoint_id, d.event_type, d.payload, d.status, d.response_code, d.attempt_count, d.last_attempt, d.created_at
+			 FROM webhook_deliveries d
+			 JOIN webhook_endpoints e ON d.endpoint_id = e.id
+			 WHERE d.endpoint_id = $1 AND e.tenant_id = $2
+			 ORDER BY d.created_at DESC LIMIT $3 OFFSET $4`,
+			endpointID, *tenantID, limit, offset,
+		)
+	} else {
+		rows, err = r.db.Query(ctx,
+			`SELECT id, endpoint_id, event_type, payload, status, response_code, attempt_count, last_attempt, created_at
+			 FROM webhook_deliveries WHERE endpoint_id = $1
+			 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+			endpointID, limit, offset,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list webhook deliveries: %w", err)
 	}
@@ -183,3 +215,13 @@ func (r *WebhookRepo) ListDeliveries(ctx context.Context, endpointID string, lim
 	}
 	return deliveries, rows.Err()
 }
+
+func (r *WebhookRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM webhooks WHERE tenant_id = $1 AND active = true`, tenantID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count webhooks by tenant: %w", err)
+	}
+	return count, nil
+}
+

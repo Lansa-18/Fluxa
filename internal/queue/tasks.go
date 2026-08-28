@@ -5,7 +5,10 @@ const (
 	TypeConfirmTx        = "transfer:confirm"
 	TypeSyncLedger       = "indexer:sync"
 	TypeReconcile        = "reconcile:run"
+	TypeBalanceReconcile = "reconcile:balance"
 	TypeWebhookDeliver   = "webhook:deliver"
+	TypeRunSchedules     = "schedule:run"
+	TypeTreasurySweep    = "treasury:sweep"
 )
 
 type ProcessTransferPayload struct {

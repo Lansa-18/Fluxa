@@ -1,0 +1,58 @@
+import { HttpClient } from "../http";
+import {
+  RegisterWebhookRequest,
+  WebhookEndpointResponse,
+  ListWebhooksResponse,
+  ListDeliveriesResponse,
+} from "../types";
+
+export class WebhooksResource {
+  constructor(private http: HttpClient) {}
+
+  async create(
+    request: RegisterWebhookRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<WebhookEndpointResponse> {
+    const res = await this.http.request<WebhookEndpointResponse>({
+      method: "POST",
+      path: "/webhooks",
+      body: request,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+
+  async list(options?: { signal?: AbortSignal }): Promise<ListWebhooksResponse> {
+    const res = await this.http.request<ListWebhooksResponse>({
+      method: "GET",
+      path: "/webhooks",
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+
+  async delete(
+    webhookId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.http.request<unknown>({
+      method: "DELETE",
+      path: `/webhooks/${encodeURIComponent(webhookId)}`,
+      signal: options?.signal,
+    });
+  }
+
+  async getDeliveries(
+    webhookId: string,
+    query?: { limit?: number; offset?: number },
+    options?: { signal?: AbortSignal },
+  ): Promise<ListDeliveriesResponse> {
+    const res = await this.http.request<ListDeliveriesResponse>({
+      method: "GET",
+      path: `/webhooks/${encodeURIComponent(webhookId)}/deliveries`,
+      query,
+      signal: options?.signal,
+    });
+    return res.data;
+  }
+}

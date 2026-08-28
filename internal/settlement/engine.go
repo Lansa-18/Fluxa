@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
@@ -137,7 +138,12 @@ func (e *Engine) SubmitTransfer(ctx context.Context, txID string) error {
 		log.Error().Err(err).Str("tx_id", txID).Str("tx_hash", resp.GetHash()).Msg("failed to update confirmed status")
 	}
 
+	// Update cached balances for source and destination wallets for the transferred asset
+	e.syncWalletBalances(ctx, srcWallet)
+	e.syncWalletBalances(ctx, dstWallet)
+
 	if tx.Fee.GreaterThan(decimal.Zero) {
+
 		collection := &domain.FeeCollection{
 			ID:            uuid.New().String(),
 			TransactionID: txID,
@@ -202,22 +208,28 @@ func isRetryable(err error) bool {
 		return false
 	}
 	errStr := err.Error()
-	return contains(errStr, "429") || contains(errStr, "503") || contains(errStr, "timeout")
+	return strings.Contains(errStr, "429") || strings.Contains(errStr, "503") || strings.Contains(errStr, "timeout")
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+func (e *Engine) syncWalletBalances(ctx context.Context, w *domain.Wallet) {
+	if w == nil {
+		return
+	}
+	if acct, err := e.stellar.LoadAccount(w.PublicKey); err == nil {
+		for _, b := range acct.Balances {
+			code := b.Code
+			if code == "" {
+				code = "XLM"
+			}
+			amt, err := decimal.NewFromString(b.Balance)
+			if err == nil {
+				_ = e.walletRepo.UpsertBalance(ctx, w.ID, code, b.Issuer, amt)
+			}
 		}
 	}
-	return false
 }
 
 type horizonTxResp struct{ hash string }
 
 func (r *horizonTxResp) GetHash() string { return r.hash }
+

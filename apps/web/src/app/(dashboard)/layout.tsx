@@ -1,3 +1,8 @@
+'use client';
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 import Sidebar from '@/components/Sidebar';
 
 export default function DashboardLayout({
@@ -5,11 +10,28 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const { isAuthenticated } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.push('/login');
+    }
+  }, [isAuthenticated, router]);
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-sm text-muted-foreground">Redirecting to login...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-screen">
+    <div className="min-h-screen">
       <Sidebar />
-      <main className="flex-1 ml-[260px] p-8 md:p-12 overflow-y-auto h-screen">
-        {children}
+      <main className="ml-64 min-h-screen p-6 lg:p-10">
+        <div className="mx-auto max-w-7xl">{children}</div>
       </main>
     </div>
   );

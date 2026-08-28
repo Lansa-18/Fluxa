@@ -1,20 +1,9 @@
 package fx
 
 import (
-    "time"
-    "github.com/shopspring/decimal"
+	"github.com/fluxa/fluxa/internal/domain"
 )
 
-type RateResponse struct {
-    Rate          decimal.Decimal `json:"rate"`
-    MidMarketRate decimal.Decimal `json:"mid_market_rate"`
-    SpreadBps     int             `json:"spread_bps"`
-    Provider      string          `json:"provider"`
-    CachedAt      time.Time       `json:"cached_at"`
-    Stale         bool            `json:"stale"`
-    SourceAmount  decimal.Decimal `json:"source_amount"`
-    DestAmount    decimal.Decimal `json:"dest_amount"`
-    FeeAmount     decimal.Decimal `json:"fee_amount"`
-    NetAmount     decimal.Decimal `json:"net_amount"`
-    FeeBps        int             `json:"fee_bps"`
-}
+// RateResponse is an alias for domain.RateResponse so it lives in a package
+// that both fx and wallet can depend on without creating an import cycle.
+type RateResponse = domain.RateResponse

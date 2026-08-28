@@ -2,46 +2,50 @@ package indexer
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/shopspring/decimal"
+	horizonclient "github.com/stellar/go/clients/horizonclient"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/base"
 	"github.com/stellar/go/protocols/horizon/operations"
 	"github.com/stellar/go/txnbuild"
 )
 
-// --- mock wallet repo ---
+type balanceUpsert struct {
+	walletID, assetCode, issuer string
+	balance                     decimal.Decimal
+}
 
-type mockWalletRepo struct {
+type fakeWalletRepo struct {
 	wallets  map[string]*domain.Wallet
+	balances []balanceUpsert
 	cursors  map[string]string
-	listErr  error
-	updateErr error
 }
 
-func newMockWalletRepo() *mockWalletRepo {
-	return &mockWalletRepo{
-		wallets: make(map[string]*domain.Wallet),
-		cursors: make(map[string]string),
-	}
+func newFakeWalletRepo() *fakeWalletRepo {
+	return &fakeWalletRepo{wallets: make(map[string]*domain.Wallet), cursors: make(map[string]string)}
 }
 
-func (m *mockWalletRepo) Create(_ context.Context, w *domain.Wallet) error {
-	m.wallets[w.ID] = w
+func (f *fakeWalletRepo) Create(_ context.Context, w *domain.Wallet) error {
+	f.wallets[w.ID] = w
 	return nil
 }
 
-func (m *mockWalletRepo) GetByID(_ context.Context, id string) (*domain.Wallet, error) {
-	w, ok := m.wallets[id]
+func (f *fakeWalletRepo) GetByID(_ context.Context, id string) (*domain.Wallet, error) {
+	w, ok := f.wallets[id]
 	if !ok {
 		return nil, domain.ErrWalletNotFound
 	}
 	return w, nil
 }
 
-func (m *mockWalletRepo) GetByPublicKey(_ context.Context, pubKey string) (*domain.Wallet, error) {
-	for _, w := range m.wallets {
+func (f *fakeWalletRepo) GetByPublicKey(_ context.Context, pubKey string) (*domain.Wallet, error) {
+	for _, w := range f.wallets {
 		if w.PublicKey == pubKey {
 			return w, nil
 		}
@@ -49,119 +53,194 @@ func (m *mockWalletRepo) GetByPublicKey(_ context.Context, pubKey string) (*doma
 	return nil, domain.ErrWalletNotFound
 }
 
-func (m *mockWalletRepo) List(_ context.Context, _, _ int) ([]*domain.Wallet, error) {
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
+func (f *fakeWalletRepo) List(_ context.Context, limit, offset int) ([]*domain.Wallet, error) {
 	var out []*domain.Wallet
-	for _, w := range m.wallets {
+	for _, w := range f.wallets {
 		out = append(out, w)
 	}
 	return out, nil
 }
 
-func (m *mockWalletRepo) UpdateSyncCursor(_ context.Context, walletID, cursor string) error {
-	if m.updateErr != nil {
-		return m.updateErr
-	}
-	m.cursors[walletID] = cursor
-	if w, ok := m.wallets[walletID]; ok {
-		w.SyncCursor = cursor
-	}
+func (f *fakeWalletRepo) GetBalances(ctx context.Context, walletID string) ([]domain.BalanceRecord, error) {
+	return nil, nil
+}
+
+func (f *fakeWalletRepo) CountByTenant(ctx context.Context, tenantID string) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeWalletRepo) UpsertBalance(_ context.Context, walletID, assetCode, issuer string, balance decimal.Decimal) error {
+	f.balances = append(f.balances, balanceUpsert{walletID, assetCode, issuer, balance})
 	return nil
 }
 
-// --- mock tx repo ---
-
-type mockTxRepo struct {
-	transactions map[string]*domain.Transaction
-	upsertErr    error
-}
-
-func newMockTxRepo() *mockTxRepo {
-	return &mockTxRepo{transactions: make(map[string]*domain.Transaction)}
-}
-
-func (m *mockTxRepo) Create(_ context.Context, tx *domain.Transaction) error {
-	m.transactions[tx.ID] = tx
+func (f *fakeWalletRepo) UpdateSyncCursor(_ context.Context, walletID, cursor string) error {
+	f.cursors[walletID] = cursor
 	return nil
 }
 
-func (m *mockTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction, error) {
-	tx, ok := m.transactions[id]
-	if !ok {
-		return nil, domain.ErrTransactionNotFound
-	}
-	return tx, nil
+type fakeTransferRepo struct {
+	created  []*domain.Transaction
+	existing map[string]bool
 }
 
-func (m *mockTxRepo) UpdateStatus(_ context.Context, id string, status domain.TransactionStatus, txHash string) error {
-	if tx, ok := m.transactions[id]; ok {
-		tx.Status = status
-		tx.TxHash = txHash
-	}
+func newFakeTransferRepo() *fakeTransferRepo {
+	return &fakeTransferRepo{existing: make(map[string]bool)}
+}
+
+func (f *fakeTransferRepo) Create(_ context.Context, tx *domain.Transaction) error {
+	f.created = append(f.created, tx)
+	f.existing[tx.TxHash] = true
 	return nil
 }
 
-func (m *mockTxRepo) ListByWallet(_ context.Context, walletID string, _, _ int) ([]*domain.Transaction, error) {
-	var out []*domain.Transaction
-	for _, tx := range m.transactions {
-		if tx.ToWallet == walletID || tx.FromWallet == walletID {
-			out = append(out, tx)
-		}
-	}
-	return out, nil
+func (f *fakeTransferRepo) GetByID(_ context.Context, id string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
 }
 
-func (m *mockTxRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
-	if m.upsertErr != nil {
-		return m.upsertErr
-	}
-	// Idempotent: skip if tx_hash already exists
-	for _, existing := range m.transactions {
-		if existing.TxHash == tx.TxHash {
-			return nil
-		}
-	}
-	m.transactions[tx.ID] = tx
+func (f *fakeTransferRepo) UpdateStatus(_ context.Context, id string, status domain.TransactionStatus, txHash string) error {
 	return nil
 }
 
-// --- mock stellar client ---
-
-type mockStellarClient struct {
-	payments []horizon.Payment
-	payErr   error
+func (f *fakeTransferRepo) ListByWallet(_ context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
+	return nil, nil
 }
 
-func (m *mockStellarClient) LoadAccount(_ string) (horizon.Account, error) {
+func (f *fakeTransferRepo) ListByBatch(_ context.Context, batchID string) ([]*domain.Transaction, error) {
+	return nil, nil
+}
+
+func (f *fakeTransferRepo) GetByIdempotencyKey(_ context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
+	return nil, domain.ErrTransactionNotFound
+}
+func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
+	return f.existing[txHash], nil
+}
+
+func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
+	if f.existing[tx.TxHash] {
+		return nil
+	}
+	f.created = append(f.created, tx)
+	f.existing[tx.TxHash] = true
+	return nil
+}
+
+func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
+	return 0, nil
+}
+
+type fakeStellarClient struct {
+	loadAccount    func(accountID string) (horizon.Account, error)
+	payments       func(accountID, cursor string, limit uint) ([]operations.Operation, error)
+	streamPayments func(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error
+}
+
+func (f *fakeStellarClient) LoadAccount(accountID string) (horizon.Account, error) {
+	if f.loadAccount != nil {
+		return f.loadAccount(accountID)
+	}
 	return horizon.Account{}, nil
 }
 
-func (m *mockStellarClient) SubmitTransaction(_ *txnbuild.Transaction) (horizon.Transaction, error) {
+func (f *fakeStellarClient) SubmitTransaction(tx *txnbuild.Transaction) (horizon.Transaction, error) {
 	return horizon.Transaction{}, nil
 }
 
-func (m *mockStellarClient) FindPathsStrict(_, _, _, _ string) ([]horizon.Path, error) {
+func (f *fakeStellarClient) FindPathsStrict(sourceAccount, destAsset, destIssuer, destAmount string) ([]horizon.Path, error) {
 	return nil, nil
 }
 
-func (m *mockStellarClient) TransactionDetail(_ string) (horizon.Transaction, error) {
+func (f *fakeStellarClient) TransactionDetail(hash string) (horizon.Transaction, error) {
 	return horizon.Transaction{}, nil
 }
 
-func (m *mockStellarClient) OperationsForTransaction(_ string) ([]operations.Operation, error) {
+func (f *fakeStellarClient) OperationsForTransaction(hash string) ([]operations.Operation, error) {
 	return nil, nil
 }
 
-func (m *mockStellarClient) PaymentsForAccount(_, cursor string, _ int) ([]horizon.Payment, error) {
-	if m.payErr != nil {
-		return nil, m.payErr
+func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+	if f.payments != nil {
+		return f.payments(accountID, cursor, limit)
 	}
-	return m.payments, nil
+	return nil, nil
 }
 
-// --- Tests ---
+func (f *fakeStellarClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error) {
+	return nil, nil
+}
+
+func (f *fakeStellarClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	return nil, nil
+}
+
+func (f *fakeStellarClient) StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
+	if f.streamPayments != nil {
+		return f.streamPayments(ctx, accountID, cursor, handler)
+	}
+	<-ctx.Done()
+	return nil
+}
+
+func incomingPaymentOp(id, pagingToken, txHash, to, amount string) operations.Payment {
+	return operations.Payment{
+		Base: operations.Base{
+			ID:                    id,
+			PT:                    pagingToken,
+			Type:                  "payment",
+			TransactionHash:       txHash,
+			TransactionSuccessful: true,
+		},
+		Asset:  base.Asset{Type: "native"},
+		From:   "GSOURCEACCOUNT",
+		To:     to,
+		Amount: amount,
+	}
+}
+
+func TestSyncWallet_PersistsBalancesAndRecordsIncomingPayment(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
+
+	op := incomingPaymentOp("op-1", "12345", "hash-1", "GDEST", "42.5000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			acct := horizon.Account{}
+			acct.Balances = []horizon.Balance{
+				{Balance: "100.0000000", Asset: base.Asset{Type: "native"}},
+			}
+			return acct, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op}, nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v", err)
+	}
+
+	if len(walletRepo.balances) != 1 || !walletRepo.balances[0].balance.Equal(decimal.NewFromInt(100)) {
+		t.Fatalf("expected XLM balance of 100 upserted, got %+v", walletRepo.balances)
+	}
+	if walletRepo.cursors[w.ID] != "12345" {
+		t.Fatalf("cursor = %q, want %q", walletRepo.cursors[w.ID], "12345")
+	}
+	if len(txRepo.created) != 1 {
+		t.Fatalf("expected 1 transaction created, got %d", len(txRepo.created))
+	}
+	tx := txRepo.created[0]
+	if tx.ToWallet != w.ID || tx.TxHash != "hash-1" || tx.Asset != "XLM" || !tx.Amount.Equal(decimal.NewFromFloat(42.5)) {
+		t.Fatalf("unexpected transaction: %+v", tx)
+	}
+}
 
 func TestSyncWallet_SetsTenantID(t *testing.T) {
 	tenantID := "tenant-abc"
@@ -171,26 +250,35 @@ func TestSyncWallet_SetsTenantID(t *testing.T) {
 		TenantID:  &tenantID,
 	}
 
-	walletRepo := newMockWalletRepo()
+	walletRepo := newFakeWalletRepo()
 	walletRepo.wallets[w.ID] = w
 
-	txRepo := newMockTxRepo()
-	stellar := &mockStellarClient{
-		payments: []horizon.Payment{
-			{ID: "p1", TransactionHash: "tx-hash-1", AssetType: "credit_alphanum4", AssetCode: "USDC", Amount: "10.5"},
+	txRepo := newFakeTransferRepo()
+
+	op := incomingPaymentOp("op-1", "12345", "tx-hash-1", "GBTEST...", "10.5000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op}, nil
 		},
 	}
 
-	idx := New(walletRepo, txRepo, stellar)
+	idx := New(walletRepo, txRepo, stellarClient)
 	if err := idx.SyncWallet(context.Background(), w); err != nil {
 		t.Fatalf("SyncWallet() error: %v", err)
 	}
 
-	if len(txRepo.transactions) != 1 {
-		t.Fatalf("expected 1 transaction, got %d", len(txRepo.transactions))
+	if len(txRepo.created) != 1 {
+		t.Fatalf("expected 1 transaction, got %d", len(txRepo.created))
 	}
 
-	for _, tx := range txRepo.transactions {
+	for _, tx := range txRepo.created {
 		if tx.TenantID == nil || *tx.TenantID != "tenant-abc" {
 			t.Fatalf("expected TenantID=tenant-abc, got %v", tx.TenantID)
 		}
@@ -203,40 +291,56 @@ func TestSyncWallet_SetsTenantID(t *testing.T) {
 func TestSyncWallet_CursorAdvances(t *testing.T) {
 	w := &domain.Wallet{ID: "w-2", PublicKey: "GBTEST2..."}
 
-	walletRepo := newMockWalletRepo()
+	walletRepo := newFakeWalletRepo()
 	walletRepo.wallets[w.ID] = w
 
-	txRepo := newMockTxRepo()
-	stellar := &mockStellarClient{
-		payments: []horizon.Payment{
-			{ID: "p1", TransactionHash: "hash-1", AssetType: "native", Amount: "5"},
-			{ID: "p2", TransactionHash: "hash-2", AssetType: "credit_alphanum4", AssetCode: "EURC", Amount: "20"},
+	txRepo := newFakeTransferRepo()
+
+	op1 := incomingPaymentOp("p1", "1000", "hash-1", "GBTEST2...", "5.0000000")
+	op2 := incomingPaymentOp("p2", "2000", "hash-2", "GBTEST2...", "20.0000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op1, op2}, nil
 		},
 	}
 
-	idx := New(walletRepo, txRepo, stellar)
+	idx := New(walletRepo, txRepo, stellarClient)
 	if err := idx.SyncWallet(context.Background(), w); err != nil {
 		t.Fatalf("SyncWallet() error: %v", err)
 	}
 
-	if w.SyncCursor != "p2" {
-		t.Fatalf("expected sync_cursor=p2, got %s", w.SyncCursor)
+	if w.SyncCursor != "2000" {
+		t.Fatalf("expected sync_cursor=2000, got %s", w.SyncCursor)
 	}
-	if walletRepo.cursors["w-2"] != "p2" {
-		t.Fatalf("expected cursor update to p2, got %s", walletRepo.cursors["w-2"])
+	if walletRepo.cursors["w-2"] != "2000" {
+		t.Fatalf("expected cursor update to 2000, got %s", walletRepo.cursors["w-2"])
 	}
 }
 
 func TestSyncWallet_NoPaymentsNoCursorUpdate(t *testing.T) {
 	w := &domain.Wallet{ID: "w-3", PublicKey: "GBTEST3...", SyncCursor: "old-cursor"}
 
-	walletRepo := newMockWalletRepo()
+	walletRepo := newFakeWalletRepo()
 	walletRepo.wallets[w.ID] = w
 
-	txRepo := newMockTxRepo()
-	stellar := &mockStellarClient{payments: []horizon.Payment{}}
+	txRepo := newFakeTransferRepo()
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			return nil, nil
+		},
+	}
 
-	idx := New(walletRepo, txRepo, stellar)
+	idx := New(walletRepo, txRepo, stellarClient)
 	if err := idx.SyncWallet(context.Background(), w); err != nil {
 		t.Fatalf("SyncWallet() error: %v", err)
 	}
@@ -246,95 +350,177 @@ func TestSyncWallet_NoPaymentsNoCursorUpdate(t *testing.T) {
 	}
 }
 
-func TestSyncWallet_IdempotentUnderDuplicateHashes(t *testing.T) {
-	w := &domain.Wallet{ID: "w-4", PublicKey: "GBTEST4..."}
-
-	walletRepo := newMockWalletRepo()
+func TestSyncWallet_SkipsAlreadyRecordedTransaction(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
 	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
+	txRepo.existing["hash-1"] = true // already recorded, e.g. by settlement flow or a prior sync
 
-	txRepo := newMockTxRepo()
-	stellar := &mockStellarClient{
-		payments: []horizon.Payment{
-			{ID: "p1", TransactionHash: "dup-hash", AssetType: "native", Amount: "1"},
+	op := incomingPaymentOp("op-1", "12345", "hash-1", "GDEST", "10.0000000")
+
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
+			}
+			return []operations.Operation{op}, nil
 		},
 	}
 
-	idx := New(walletRepo, txRepo, stellar)
-
-	// First sync
+	idx := New(walletRepo, txRepo, stellarClient)
 	if err := idx.SyncWallet(context.Background(), w); err != nil {
-		t.Fatalf("first SyncWallet() error: %v", err)
+		t.Fatalf("SyncWallet() error: %v", err)
 	}
-	countAfterFirst := len(txRepo.transactions)
 
-	// Second sync with same payment — should not create duplicate
-	if err := idx.SyncWallet(context.Background(), w); err != nil {
-		t.Fatalf("second SyncWallet() error: %v", err)
+	if len(txRepo.created) != 0 {
+		t.Fatalf("expected no new transactions for an already-recorded hash, got %d", len(txRepo.created))
 	}
-	countAfterSecond := len(txRepo.transactions)
-
-	if countAfterFirst != countAfterSecond {
-		t.Fatalf("expected idempotent insert: first=%d, second=%d", countAfterFirst, countAfterSecond)
+	// The cursor still advances so the duplicate isn't reconsidered on the next sync.
+	if walletRepo.cursors[w.ID] != "12345" {
+		t.Fatalf("cursor = %q, want %q", walletRepo.cursors[w.ID], "12345")
 	}
 }
 
-func TestSyncWallet_404IsNoOp(t *testing.T) {
-	w := &domain.Wallet{ID: "w-5", PublicKey: "GBTEST5..."}
-
-	walletRepo := newMockWalletRepo()
+func TestSyncWallet_SkipsOutgoingPayments(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
 	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
 
-	txRepo := newMockTxRepo()
-	stellar := &mockStellarClient{
-		payErr: fmt.Errorf("horizon error 404"),
-	}
+	// Payment originating from this wallet (already tracked by the settlement
+	// flow when it was submitted) should not be re-recorded as inbound.
+	op := incomingPaymentOp("op-1", "12345", "hash-1", "GSOMEONEELSE", "10.0000000")
 
-	idx := New(walletRepo, txRepo, stellar)
-	if err := idx.SyncWallet(context.Background(), w); err != nil {
-		t.Fatalf("SyncWallet() should return nil for 404, got: %v", err)
-	}
-}
-
-func TestExtractAssetCode(t *testing.T) {
-	tests := []struct {
-		name     string
-		payment  horizon.Payment
-		expected string
-	}{
-		{"USDC", horizon.Payment{AssetCode: "USDC"}, "USDC"},
-		{"native", horizon.Payment{AssetType: "native"}, "XLM"},
-		{"fallback", horizon.Payment{AssetType: "credit_alphanum12"}, "credit_alphanum12"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractAssetCode(tt.payment)
-			if got != tt.expected {
-				t.Fatalf("extractAssetCode() = %q, want %q", got, tt.expected)
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, nil
+		},
+		payments: func(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+			if cursor != "" {
+				return nil, nil
 			}
-		})
+			return []operations.Operation{op}, nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v", err)
+	}
+
+	if len(txRepo.created) != 0 {
+		t.Fatalf("expected outgoing payment to be skipped, got %d transactions", len(txRepo.created))
 	}
 }
 
-func TestNewInboundTransaction_TenantID(t *testing.T) {
-	tenantID := "tenant-xyz"
-	tx := newInboundTransaction("w-1", "hash-1", "USDC", "100", &tenantID)
+func TestSyncWallet_AccountNotFound_ReturnsNilWithoutSyncing(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
 
-	if tx.TenantID == nil || *tx.TenantID != "tenant-xyz" {
-		t.Fatalf("expected TenantID=tenant-xyz, got %v", tx.TenantID)
+	stellarClient := &fakeStellarClient{
+		loadAccount: func(accountID string) (horizon.Account, error) {
+			return horizon.Account{}, &horizonclient.Error{
+				Response: &http.Response{StatusCode: 404, Status: "404"},
+			}
+		},
 	}
-	if tx.Asset != "USDC" {
-		t.Fatalf("expected Asset=USDC, got %s", tx.Asset)
+
+	idx := New(walletRepo, txRepo, stellarClient)
+	if err := idx.SyncWallet(context.Background(), w); err != nil {
+		t.Fatalf("SyncWallet() error: %v, want nil for an unfunded account", err)
 	}
-	if tx.Status != domain.StatusConfirmed {
-		t.Fatalf("expected status=confirmed, got %s", tx.Status)
+
+	if len(walletRepo.balances) != 0 || len(txRepo.created) != 0 {
+		t.Fatal("expected no balances or transactions to be recorded for an unfunded account")
 	}
 }
 
-func TestNewInboundTransaction_NilTenantID(t *testing.T) {
-	tx := newInboundTransaction("w-2", "hash-2", "XLM", "50", nil)
+func TestStreamWallet_ReconnectsAfterStreamFailureAndProcessesPayment(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
 
-	if tx.TenantID != nil {
-		t.Fatalf("expected nil TenantID, got %v", tx.TenantID)
+	op := incomingPaymentOp("op-1", "99999", "hash-1", "GDEST", "5.0000000")
+
+	var attempts int
+	processed := make(chan struct{})
+
+	stellarClient := &fakeStellarClient{
+		streamPayments: func(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("connection reset by peer")
+			}
+			if err := handler(op); err != nil {
+				return err
+			}
+			close(processed)
+			<-ctx.Done()
+			return nil
+		},
+	}
+
+	idx := New(walletRepo, txRepo, stellarClient)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		idx.StreamWallet(ctx, w)
+		close(done)
+	}()
+
+	select {
+	case <-processed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream to reconnect and process a payment")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamWallet did not return after ctx was canceled")
+	}
+
+	if attempts < 2 {
+		t.Fatalf("expected at least 2 stream attempts (initial + reconnect), got %d", attempts)
+	}
+	if len(txRepo.created) != 1 || txRepo.created[0].TxHash != "hash-1" {
+		t.Fatalf("expected payment processed after reconnect, got %+v", txRepo.created)
+	}
+	if walletRepo.cursors[w.ID] != "99999" {
+		t.Fatalf("cursor = %q, want %q", walletRepo.cursors[w.ID], "99999")
+	}
+}
+
+func TestStreamWallet_StopsImmediatelyWhenContextCanceled(t *testing.T) {
+	w := &domain.Wallet{ID: "wallet-1", PublicKey: "GDEST"}
+	walletRepo := newFakeWalletRepo()
+	walletRepo.wallets[w.ID] = w
+	txRepo := newFakeTransferRepo()
+
+	stellarClient := &fakeStellarClient{}
+	idx := New(walletRepo, txRepo, stellarClient)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		idx.StreamWallet(ctx, w)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamWallet did not return promptly for an already-canceled context")
 	}
 }

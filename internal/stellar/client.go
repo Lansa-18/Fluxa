@@ -1,6 +1,7 @@
 package stellar
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/stellar/go/clients/horizonclient"
@@ -17,6 +18,16 @@ type Client interface {
 	TransactionDetail(hash string) (horizon.Transaction, error)
 	OperationsForTransaction(hash string) ([]operations.Operation, error)
 	PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error)
+	// Payments returns a page of payment operations for an account, starting
+	// strictly after cursor (empty cursor starts from the account's first payment).
+	Payments(accountID, cursor string, limit uint) ([]operations.Operation, error)
+	// StreamPayments streams payment operations for an account in real time,
+	// starting strictly after cursor (empty cursor streams only new payments).
+	// It blocks until ctx is canceled or the stream errors.
+	StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error
+	// Offers returns the open offers for an account, up to limit (capped by
+	// Horizon at 200 per page).
+	Offers(accountID string, limit uint) ([]horizon.Offer, error)
 }
 
 type horizonClient struct {
@@ -59,6 +70,56 @@ func (c *horizonClient) OperationsForTransaction(hash string) ([]operations.Oper
 	page, err := c.inner.Operations(horizonclient.OperationRequest{ForTransaction: hash})
 	if err != nil {
 		return nil, fmt.Errorf("operations for transaction: %w", err)
+	}
+	return page.Embedded.Records, nil
+}
+
+func (c *horizonClient) Payments(accountID, cursor string, limit uint) ([]operations.Operation, error) {
+	page, err := c.inner.Payments(horizonclient.OperationRequest{
+		ForAccount: accountID,
+		Cursor:     cursor,
+		Limit:      limit,
+		Order:      horizonclient.OrderAsc,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payments for account %s: %w", accountID, err)
+	}
+	return page.Embedded.Records, nil
+}
+
+func (c *horizonClient) StreamPayments(ctx context.Context, accountID, cursor string, handler func(operations.Operation) error) error {
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var handlerErr error
+	err := c.inner.StreamPayments(streamCtx, horizonclient.OperationRequest{
+		ForAccount: accountID,
+		Cursor:     cursor,
+	}, func(op operations.Operation) {
+		if handlerErr != nil {
+			return
+		}
+		if err := handler(op); err != nil {
+			handlerErr = err
+			cancel() // stop the stream promptly; don't process further events
+		}
+	})
+	if handlerErr != nil {
+		return handlerErr
+	}
+	if err != nil {
+		return fmt.Errorf("stream payments for account %s: %w", accountID, err)
+	}
+	return nil
+}
+
+func (c *horizonClient) Offers(accountID string, limit uint) ([]horizon.Offer, error) {
+	page, err := c.inner.Offers(horizonclient.OfferRequest{
+		ForAccount: accountID,
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("offers for account %s: %w", accountID, err)
 	}
 	return page.Embedded.Records, nil
 }

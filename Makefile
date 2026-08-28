@@ -44,3 +44,21 @@ tidy:
 # Generate sqlc (if using sqlc for query generation)
 generate:
 	sqlc generate
+
+# Docker helpers
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up --build -d
+
+docker-down:
+	docker compose down -v
+
+docker-logs:
+	docker compose logs -f api worker
+
+# CI locally (mimics GitHub Actions)
+ci: lint test
+	cd apps/web && npm ci && npm run lint && npm run build
+	cd sdk && npm install && npm run typecheck && npm run build

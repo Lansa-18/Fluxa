@@ -1,0 +1,2104 @@
+openapi: "3.0.3"
+info:
+  title: "Fluxa API"
+  version: "1.0.0"
+  description: |
+    Fluxa is a multi-currency digital asset platform built on Stellar. It provides
+    wallets, instant transfers, FX conversions, scheduled recurring payments,
+    batch disbursements, fiat on/off-ramps, and a developer-friendly webhook system.
+
+    All endpoints under `/v1` require a Bearer API key in the `Authorization` header.
+  contact:
+    name: "Fluxa Engineering"
+    email: "engineering@fluxa.io"
+    url: "https://github.com/fluxa/fluxa"
+  license:
+    name: "MIT"
+    url: "https://opensource.org/licenses/MIT"
+
+servers:
+  - url: http://localhost:3000
+    description: "Local development"
+  - url: https://api.fluxa.io
+    description: "Production"
+
+tags:
+  - name: "Auth"
+    description: "Tenant registration, login and API key management"
+  - name: "Wallets"
+    description: "Stellar wallet creation, balances, and fiat deposits/withdrawals"
+  - name: "Transfers"
+    description: "Single and batch transfers between wallets"
+  - name: "Transactions"
+    description: "Transaction history"
+  - name: "FX"
+    description: "Foreign-exchange quotes, conversions and rate lookups"
+  - name: "Schedules"
+    description: "Recurring transfer schedules"
+  - name: "Webhooks"
+    description: "Webhook endpoint management and delivery logs"
+  - name: "Fees"
+    description: "Fee schedule queries"
+  - name: "Admin"
+    description: "Administrative endpoints (require admin key)"
+  - name: "System"
+    description: "Health, metrics and fiat provider webhooks"
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ── System ────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      operationId: getHealth
+      summary: "Health check"
+      description: "Returns service health. Checks Postgres and Redis connectivity."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "All services healthy"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "ok"
+                services:
+                  postgres: "up"
+                  redis: "up"
+        "503":
+          description: "One or more services degraded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "degraded"
+                services:
+                  postgres: "up"
+                  redis: "down"
+
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: "Server metrics"
+      description: "Returns runtime metrics: uptime, request counts, active requests, error rate by status code."
+      tags: ["System"]
+      security: []
+      responses:
+        "200":
+          description: "Metrics snapshot"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+              example:
+                started_at: "2026-01-15T10:00:00Z"
+                total_requests: 142857
+                active_requests: 3
+                total_errors: 120
+                uptime_seconds: 86400.5
+                requests_by_code:
+                  "OK": 140000
+                  "Bad Request": 80
+                  "Not Found": 40
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /v1/auth/register:
+    post:
+      operationId: registerTenant
+      summary: "Register a new tenant"
+      description: "Creates a new tenant account and returns the initial API key."
+      tags: ["Auth"]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            example:
+              name: "Acme Corp"
+              email: "ops@acme.com"
+      responses:
+        "201":
+          description: "Tenant registered"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+              example:
+                tenant_id: "t_8f3a2b1c"
+                api_key: "sk_live_abc123def456"
+                name: "Acme Corp"
+                email: "ops@acme.com"
+                created_at: "2026-01-15T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /v1/auth/login:
+    post:
+      operationId: loginTenant
+      summary: "Login and issue a new API key"
+      description: "Authenticates an existing tenant and returns a new API key."
+      tags: ["Auth"]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              email: "ops@acme.com"
+              password: "s3cret"
+      responses:
+        "200":
+          description: "Login successful"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+              example:
+                tenant_id: "t_8f3a2b1c"
+                api_key: "sk_live_abc123def456"
+                name: "Acme Corp"
+                email: "ops@acme.com"
+                created_at: "2026-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── API Keys ──────────────────────────────────────────────────────────────
+  /v1/keys:
+    post:
+      operationId: createAPIKey
+      summary: "Create an API key"
+      description: |
+        Generates a new API key for the authenticated tenant. The raw key is
+        returned only in this response — it cannot be retrieved later.
+      tags: ["Auth"]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKeyRequest"
+            example:
+              label: "CI deploy key"
+      responses:
+        "201":
+          description: "API key created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyCreated"
+              example:
+                id: "k_9a8b7c6d"
+                key: "sk_live_a1b2c3d4e5f6g7h8"
+                prefix: "sk_live_a1b2"
+                label: "CI deploy key"
+                created_at: "2026-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      operationId: listAPIKeys
+      summary: "List API keys"
+      description: "Returns all API keys for the authenticated tenant."
+      tags: ["Auth"]
+      responses:
+        "200":
+          description: "List of API keys"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/APIKeySummary"
+              example:
+                - id: "k_9a8b7c6d"
+                  prefix: "sk_live_a1b2"
+                  label: "CI deploy key"
+                  last_used_at: "2026-01-15T12:00:00Z"
+                  revoked_at: null
+                  created_at: "2026-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/keys/{id}:
+    delete:
+      operationId: revokeAPIKey
+      summary: "Revoke an API key"
+      description: "Permanently revokes the given API key. The key can no longer be used."
+      tags: ["Auth"]
+      parameters:
+        - $ref: "#/components/parameters/KeyID"
+      responses:
+        "204":
+          description: "Key revoked"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Wallets ───────────────────────────────────────────────────────────────
+  /v1/wallets:
+    post:
+      operationId: createWallet
+      summary: "Create a wallet"
+      description: "Generates a new Stellar keypair, encrypts the secret, and returns the wallet."
+      tags: ["Wallets"]
+      responses:
+        "201":
+          description: "Wallet created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletCreated"
+              example:
+                id: "w_1a2b3c4d"
+                public_key: "GBXCAFE7RJHBEVGT5ANBZ7YXDU7S3Y3VQWZ5J4YKJ2D6S7F8G9H0I"
+                created_at: "2026-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /v1/wallets/{id}:
+    get:
+      operationId: getWallet
+      summary: "Get wallet details"
+      description: "Returns the wallet metadata including public key and creation timestamp."
+      tags: ["Wallets"]
+      parameters:
+        - $ref: "#/components/parameters/WalletID"
+      responses:
+        "200":
+          description: "Wallet details"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+              example:
+                id: "w_1a2b3c4d"
+                public_key: "GBXCAFE7RJHBEVGT5ANBZ7YXDU7S3Y3VQWZ5J4YKJ2D6S7F8G9H0I"
+                created_at: "2026-01-15T10:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/wallets/{id}/balances:
+    get:
+      operationId: getWalletBalances
+      summary: "Get wallet balances"
+      description: "Returns all asset balances for the wallet from the Stellar network."
+      tags: ["Wallets"]
+      parameters:
+        - $ref: "#/components/parameters/WalletID"
+      responses:
+        "200":
+          description: "Wallet balances"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalances"
+              example:
+                wallet_id: "w_1a2b3c4d"
+                balances:
+                  - asset_code: "USDC"
+                    issuer: "GA5ZSEJ6BHT2ZKGDABICHI62W25ZJUXUNFFYGLYTIEXP6CZMUWqmOvxM"
+                    balance: "1250.0000000"
+                  - asset_code: "XLM"
+                    issuer: ""
+                    balance: "42.5000000"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/wallets/{id}/trustlines:
+    post:
+      operationId: createTrustline
+      summary: "Establish a trustline"
+      description: "Adds a trustline for an asset on the wallet so it can hold that token."
+      tags: ["Wallets"]
+      parameters:
+        - $ref: "#/components/parameters/WalletID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTrustlineRequest"
+            example:
+              asset_code: "USDC"
+              asset_issuer: "GA5ZSEJ6BHT2ZKGDABICHI62W25ZJUXUNFFYGLYTIEXP6CZMUWqmOvxM"
+              limit: "100000"
+      responses:
+        "202":
+          description: "Trustline submission accepted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrustlineResponse"
+              example:
+                wallet_id: "w_1a2b3c4d"
+                asset_code: "USDC"
+                asset_issuer: "GA5ZSEJ6BHT2ZKGDABICHI62W25ZJUXUNFFYGLYTIEXP6CZMUWqmOvxM"
+                status: "submitted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/wallets/{id}/deposit/fiat:
+    post:
+      operationId: depositFiat
+      summary: "Initiate a fiat deposit"
+      description: |
+        Starts a fiat-to-crypto deposit via the configured payment rail (e.g. Flutterwave).
+        Returns a payment link the customer should be redirected to.
+      tags: ["Wallets"]
+      parameters:
+        - $ref: "#/components/parameters/WalletID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FiatDepositRequest"
+            example:
+              amount: "100.00"
+              currency: "NGN"
+              email: "customer@acme.com"
+              name: "John Doe"
+      responses:
+        "200":
+          description: "Deposit initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DepositResponse"
+              example:
+                payment_link: "https://checkout.flutterwave.com/pay/abc123"
+                reference: "DEP-a1b2c3d4"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/wallets/{id}/withdraw/fiat:
+    post:
+      operationId: withdrawFiat
+      summary: "Initiate a fiat withdrawal"
+      description: "Converts USDC from the wallet and sends fiat to a bank account."
+      tags: ["Wallets"]
+      parameters:
+        - $ref: "#/components/parameters/WalletID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FiatWithdrawalRequest"
+            example:
+              amount: "50.00"
+              currency: "NGN"
+              account_bank: "GTBank"
+              account_number: "0123456789"
+      responses:
+        "200":
+          description: "Withdrawal initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WithdrawalResponse"
+              example:
+                reference: "WIT-e5f6g7h8"
+                status: "pending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Transfers ─────────────────────────────────────────────────────────────
+  /v1/transfers:
+    post:
+      operationId: initiateTransfer
+      summary: "Initiate a transfer"
+      description: "Moves an asset between two wallets, applying platform fees."
+      tags: ["Transfers"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTransferRequest"
+            example:
+              from_wallet_id: "w_1a2b3c4d"
+              to_wallet_id: "w_5e6f7g8h"
+              asset: "USDC"
+              amount: "100.0000000"
+      responses:
+        "202":
+          description: "Transfer accepted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+              example:
+                id: "tx_abc123"
+                tx_hash: ""
+                type: "transfer"
+                status: "pending"
+                from_wallet_id: "w_1a2b3c4d"
+                to_wallet_id: "w_5e6f7g8h"
+                asset: "USDC"
+                amount: "100.0000000"
+                fee_amount: "0.2500000"
+                net_amount: "99.7500000"
+                fee_bps: 25
+                created_at: "2026-01-15T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      operationId: listTransfers
+      summary: "List transfers"
+      description: "Returns all transactions for a given wallet."
+      tags: ["Transactions"]
+      parameters:
+        - name: wallet_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: "Filter by wallet ID"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: "Maximum number of results"
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: "Offset for pagination"
+      responses:
+        "200":
+          description: "List of transactions"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TransferResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/transfers/{id}:
+    get:
+      operationId: getTransfer
+      summary: "Get transfer details"
+      description: "Returns full details for a single transfer."
+      tags: ["Transfers"]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Transaction ID"
+      responses:
+        "200":
+          description: "Transfer details"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Batch Transfers ───────────────────────────────────────────────────────
+  /v1/transfers/batch:
+    post:
+      operationId: createBatch
+      summary: "Create a batch transfer"
+      description: |
+        Submits up to 100 transfers from a single source wallet in one request.
+        Each transfer is processed independently; partial success is possible.
+      tags: ["Transfers"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBatchRequest"
+            example:
+              from_wallet_id: "w_1a2b3c4d"
+              transfers:
+                - to_wallet_id: "w_5e6f7g8h"
+                  asset: "USDC"
+                  amount: "50.0000000"
+                  reference: "payroll-jan"
+                - to_wallet_id: "w_9i0j1k2l"
+                  asset: "USDC"
+                  amount: "75.0000000"
+                  reference: "payroll-jan"
+      responses:
+        "202":
+          description: "Batch accepted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/transfers/batch/{batchId}:
+    get:
+      operationId: getBatch
+      summary: "Get batch status"
+      description: "Returns the batch and the status of every individual transfer in it."
+      tags: ["Transfers"]
+      parameters:
+        - name: batchId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Batch ID"
+      responses:
+        "200":
+          description: "Batch details"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/transfers/batch/{batchId}/export:
+    get:
+      operationId: exportBatch
+      summary: "Export batch as CSV"
+      description: "Downloads the batch transfer results as a CSV file."
+      tags: ["Transfers"]
+      parameters:
+        - name: batchId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Batch ID"
+      responses:
+        "200":
+          description: "CSV file"
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── FX ────────────────────────────────────────────────────────────────────
+  /v1/fx/quote:
+    post:
+      operationId: getFXQuote
+      summary: "Get an FX quote"
+      description: |
+        Returns a time-limited conversion quote (valid for 30 seconds).
+        Use the returned `id` with POST /v1/fx/convert to execute.
+      tags: ["FX"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuoteRequest"
+            example:
+              from_asset: "USDC"
+              to_asset: "XLM"
+              amount: "100.0000000"
+      responses:
+        "200":
+          description: "FX quote"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quote"
+              example:
+                id: "q_abc123"
+                org_id: "t_8f3a2b1c"
+                from_asset: "USDC"
+                to_asset: "XLM"
+                from_amount: "100.0000000"
+                to_amount: "3450.2500000"
+                rate: "34.5025000"
+                fee: "0.2500000"
+                expires_at: "2026-01-15T10:00:30Z"
+                used: false
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/fx/convert:
+    post:
+      operationId: executeConversion
+      summary: "Execute a conversion"
+      description: "Executes a previously quoted FX conversion. The quote must not be expired or already used."
+      tags: ["FX"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertRequest"
+            example:
+              wallet_id: "w_1a2b3c4d"
+              quote_id: "q_abc123"
+      responses:
+        "200":
+          description: "Conversion executed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversionResponse"
+              example:
+                id: "conv_xyz789"
+                wallet_id: "w_1a2b3c4d"
+                source_asset: "USDC"
+                dest_asset: "XLM"
+                source_amount: "100.0000000"
+                dest_amount: "3450.2500000"
+                fee_amount: "0.2500000"
+                fee_bps: 25
+                rate: "34.5025000"
+                tx_hash: "a1b2c3d4..."
+                created_at: "2026-01-15T10:00:05Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: "Quote expired or already used"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "QUOTE_EXPIRED"
+                  message: "quote expired"
+
+  /v1/fx/rates:
+    get:
+      operationId: getFXRates
+      summary: "Get exchange rate"
+      description: "Returns the current exchange rate between two assets including fees."
+      tags: ["FX"]
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "Source asset code (e.g. USDC)"
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+          description: "Destination asset code (e.g. XLM)"
+      responses:
+        "200":
+          description: "Rate information"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateResponse"
+              example:
+                rate: "34.5025000"
+                mid_market_rate: "34.6000000"
+                spread_bps: 28
+                provider: "stellar"
+                cached_at: "2026-01-15T10:00:00Z"
+                stale: false
+                source_amount: "100.0000000"
+                dest_amount: "3450.2500000"
+                fee_amount: "0.2500000"
+                net_amount: "3449.0000000"
+                fee_bps: 25
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Schedules ─────────────────────────────────────────────────────────────
+  /v1/schedules:
+    post:
+      operationId: createSchedule
+      summary: "Create a recurring transfer schedule"
+      description: "Sets up a recurring transfer that runs daily, weekly, or monthly."
+      tags: ["Schedules"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScheduleRequest"
+            example:
+              from_wallet_id: "w_1a2b3c4d"
+              to_wallet_id: "w_5e6f7g8h"
+              asset: "USDC"
+              amount: "100.0000000"
+              frequency: "monthly"
+              start_date: "2026-02-01T00:00:00Z"
+              end_date: "2026-12-31T23:59:59Z"
+      responses:
+        "201":
+          description: "Schedule created"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      operationId: listSchedules
+      summary: "List schedules"
+      description: "Returns all recurring transfer schedules for the tenant."
+      tags: ["Schedules"]
+      responses:
+        "200":
+          description: "List of schedules"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schedules:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ScheduleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/schedules/{id}:
+    patch:
+      operationId: updateSchedule
+      summary: "Update a schedule"
+      description: "Updates the amount, frequency, end date, or pauses/resumes a schedule."
+      tags: ["Schedules"]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScheduleRequest"
+            example:
+              status: "paused"
+              amount: "150.0000000"
+      responses:
+        "200":
+          description: "Schedule updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: cancelSchedule
+      summary: "Cancel a schedule"
+      description: "Cancels a recurring transfer schedule. Cannot be undone."
+      tags: ["Schedules"]
+      parameters:
+        - $ref: "#/components/parameters/ScheduleID"
+      responses:
+        "204":
+          description: "Schedule cancelled"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Webhooks ──────────────────────────────────────────────────────────────
+  /v1/webhooks:
+    post:
+      operationId: registerWebhook
+      summary: "Register a webhook endpoint"
+      description: |
+        Registers a new webhook endpoint. A signing secret is generated and
+        returned — it will be used to sign webhook payloads via HMAC-SHA256.
+      tags: ["Webhooks"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterWebhookRequest"
+            example:
+              url: "https://acme.com/hooks/fluxa"
+              events:
+                - "transfer.initiated"
+                - "transfer.settled"
+      responses:
+        "201":
+          description: "Webhook registered"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookEndpointResponse"
+              example:
+                id: "wh_abc123"
+                url: "https://acme.com/hooks/fluxa"
+                secret: "whsec_abc123def456"
+                events:
+                  - "transfer.initiated"
+                  - "transfer.settled"
+                active: true
+                created_at: "2026-01-15T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    get:
+      operationId: listWebhooks
+      summary: "List webhook endpoints"
+      description: "Returns all registered webhook endpoints for the tenant."
+      tags: ["Webhooks"]
+      responses:
+        "200":
+          description: "List of webhook endpoints"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoints:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookEndpointSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/webhooks/{id}:
+    delete:
+      operationId: deleteWebhook
+      summary: "Delete a webhook endpoint"
+      description: "Permanently removes the webhook endpoint."
+      tags: ["Webhooks"]
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      responses:
+        "204":
+          description: "Webhook deleted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/webhooks/{id}/deliveries:
+    get:
+      operationId: listWebhookDeliveries
+      summary: "List webhook deliveries"
+      description: "Returns delivery attempts for a specific webhook endpoint."
+      tags: ["Webhooks"]
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: "List of deliveries"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookDelivery"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Fiat provider webhooks ────────────────────────────────────────────────
+  /v1/webhooks/fiat/{provider}:
+    post:
+      operationId: handleFiatWebhook
+      summary: "Handle a fiat provider webhook"
+      description: |
+        Receives webhook callbacks from fiat payment providers (e.g. Flutterwave).
+        This is an internal endpoint called by the provider, not by the tenant.
+      tags: ["System"]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Provider name (e.g. flutterwave)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "Provider-specific webhook payload"
+      responses:
+        "200":
+          description: "Webhook processed"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+        "400":
+          description: "Webhook validation failed"
+
+  # ── Fees ──────────────────────────────────────────────────────────────────
+  /v1/fees:
+    get:
+      operationId: getFeeSchedule
+      summary: "Get fee schedule"
+      description: "Returns the fee schedule for the authenticated tenant."
+      tags: ["Fees"]
+      responses:
+        "200":
+          description: "Fee schedule"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeeScheduleResponse"
+              example:
+                transfer_fee_bps: 25
+                conversion_fee_bps: 30
+                min_fee_amount: "0.0100000"
+                max_fee_amount: "50.0000000"
+                asset: "USDC"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Usage ─────────────────────────────────────────────────────────────────
+  /v1/usage:
+    get:
+      operationId: getUsage
+      summary: "Get API usage"
+      description: "Returns API usage metrics for the current tenant."
+      tags: ["Fees"]
+      responses:
+        "200":
+          description: "Usage summary"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ── Admin ─────────────────────────────────────────────────────────────────
+  /v1/admin/fees/collected:
+    get:
+      operationId: listCollectedFees
+      summary: "List collected fees"
+      description: |
+        Returns fee collection totals grouped by asset and tenant.
+        Requires an admin API key (`sk_admin_` prefix).
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: start_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: "Start of period (RFC3339)"
+        - name: end_date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: "End of period (RFC3339)"
+      responses:
+        "200":
+          description: "Fee collection summary"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FeeCollectionSummary"
+              example:
+                summary:
+                  - asset: "USDC"
+                    total_fees: "1250.5000000"
+                    tenant_fees:
+                      - tenant_id: "t_8f3a2b1c"
+                        total_fees: "1250.5000000"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/reconciliation/summary:
+    get:
+      operationId: getReconciliationSummary
+      summary: "Get reconciliation summary"
+      description: |
+        Returns a daily breakdown of reconciliation results (ok / mismatch / not_found)
+        and the count of pending stuck transactions. Requires an admin API key.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 7
+            minimum: 1
+            maximum: 90
+          description: "Number of days to look back"
+      responses:
+        "200":
+          description: "Reconciliation summary"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationSummary"
+              example:
+                days:
+                  - date: "2026-01-15"
+                    ok: 1200
+                    mismatch: 3
+                    not_found: 1
+                  - date: "2026-01-14"
+                    ok: 1150
+                    mismatch: 0
+                    not_found: 2
+                total_ok: 2350
+                total_mismatch: 3
+                total_not_found: 3
+                pending_stuck: 0
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /v1/admin/reconciliation/run:
+    post:
+      operationId: runReconciliation
+      summary: "Trigger a reconciliation run"
+      description: |
+        Manually triggers a reconciliation pass that checks pending transactions
+        against the Stellar Horizon API. Requires an admin API key.
+      tags: ["Admin"]
+      security:
+        - AdminAuth: []
+      responses:
+        "202":
+          description: "Reconciliation run started"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: ["started"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Components
+# ══════════════════════════════════════════════════════════════════════════════
+components:
+  # ── Security Schemes ────────────────────────────────────────────────────
+  securitySchemes:
+    BearerAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Pass a tenant API key as `Bearer <key>` in the `Authorization` header.
+        Keys are prefixed with `sk_live_` (production) or `sk_test_` (sandbox).
+    AdminAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Pass an admin API key as `Bearer <key>`. Admin keys are prefixed with
+        `sk_admin_`.
+
+  # ── Parameters ──────────────────────────────────────────────────────────
+  parameters:
+    WalletID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: "Wallet ID"
+    KeyID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: "API key ID"
+    ScheduleID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: "Schedule ID"
+    WebhookID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: "Webhook endpoint ID"
+
+  # ── Reusable Responses ──────────────────────────────────────────────────
+  responses:
+    BadRequest:
+      description: "Bad request"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "BAD_REQUEST"
+              message: "invalid request body"
+    Unauthorized:
+      description: "Unauthorized — missing or invalid API key"
+      content:
+        application/json:
+          schema:
+            type: object
+          example:
+            error: "missing or invalid authorization header"
+    NotFound:
+      description: "Resource not found"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "NOT_FOUND"
+              message: "resource not found"
+    Forbidden:
+      description: "Forbidden — admin access required"
+      content:
+        application/json:
+          schema:
+            type: object
+          example:
+            error:
+              code: "FORBIDDEN"
+              message: "admin access required"
+    InternalServerError:
+      description: "Internal server error"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "INTERNAL_ERROR"
+              message: "an unexpected error occurred"
+
+  # ── Schemas ─────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Error ────────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      required: ["error"]
+      properties:
+        error:
+          type: object
+          required: ["code", "message"]
+          properties:
+            code:
+              type: string
+              enum:
+                - "BAD_REQUEST"
+                - "NOT_FOUND"
+                - "UNAUTHORIZED"
+                - "FORBIDDEN"
+                - "INTERNAL_ERROR"
+                - "QUOTE_EXPIRED"
+                - "QUOTE_ALREADY_USED"
+              description: "Machine-readable error code"
+            message:
+              type: string
+              description: "Human-readable error message"
+
+    # ── Health ────────────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ["ok", "degraded"]
+        services:
+          type: object
+          additionalProperties:
+            type: string
+            enum: ["up", "down"]
+
+    # ── Metrics ───────────────────────────────────────────────────────────
+    MetricsResponse:
+      type: object
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        total_requests:
+          type: integer
+          format: int64
+        active_requests:
+          type: integer
+          format: int64
+        total_errors:
+          type: integer
+          format: int64
+        uptime_seconds:
+          type: number
+          format: double
+        requests_by_code:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+
+    # ── Auth ──────────────────────────────────────────────────────────────
+    RegisterRequest:
+      type: object
+      required: ["name", "email", "password"]
+      properties:
+        name:
+          type: string
+          description: "Tenant / organization name"
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    LoginRequest:
+      type: object
+      required: ["email", "password"]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    AuthResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        api_key:
+          type: string
+          description: "Raw API key — returned once only"
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+
+    # ── API Keys ──────────────────────────────────────────────────────────
+    CreateKeyRequest:
+      type: object
+      properties:
+        label:
+          type: string
+          nullable: true
+          description: "Optional human-readable label for the key"
+
+    APIKeyCreated:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+          description: "Raw API key — returned once only"
+        prefix:
+          type: string
+          description: "First 8 characters of the key for identification"
+        label:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    APIKeySummary:
+      type: object
+      properties:
+        id:
+          type: string
+        prefix:
+          type: string
+        label:
+          type: string
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Wallet ────────────────────────────────────────────────────────────
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+        public_key:
+          type: string
+          description: "Stellar public key"
+        created_at:
+          type: string
+          format: date-time
+
+    WalletCreated:
+      type: object
+      properties:
+        id:
+          type: string
+        public_key:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    WalletBalances:
+      type: object
+      properties:
+        wallet_id:
+          type: string
+        balances:
+          type: array
+          items:
+            $ref: "#/components/schemas/Balance"
+
+    Balance:
+      type: object
+      properties:
+        asset_code:
+          type: string
+          description: "Asset code (e.g. USDC, XLM)"
+        issuer:
+          type: string
+          description: "Issuer public key (empty for native XLM)"
+        balance:
+          type: string
+          description: "Available balance as decimal string"
+
+    CreateTrustlineRequest:
+      type: object
+      required: ["asset_code", "asset_issuer"]
+      properties:
+        asset_code:
+          type: string
+        asset_issuer:
+          type: string
+          description: "Issuer public key"
+        limit:
+          type: string
+          description: "Trust line limit (optional)"
+
+    TrustlineResponse:
+      type: object
+      properties:
+        wallet_id:
+          type: string
+        asset_code:
+          type: string
+        asset_issuer:
+          type: string
+        status:
+          type: string
+          enum: ["submitted"]
+
+    # ── Fiat ──────────────────────────────────────────────────────────────
+    FiatDepositRequest:
+      type: object
+      required: ["amount", "currency", "email", "name"]
+      properties:
+        amount:
+          type: string
+          description: "Fiat amount as decimal string"
+        currency:
+          type: string
+          description: "Fiat currency code (e.g. NGN, USD, KES)"
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+
+    DepositResponse:
+      type: object
+      properties:
+        payment_link:
+          type: string
+          format: uri
+          description: "URL the customer should visit to complete payment"
+        reference:
+          type: string
+          description: "Unique deposit reference (DEP-XXXXXXXX)"
+
+    FiatWithdrawalRequest:
+      type: object
+      required: ["amount", "currency", "account_bank", "account_number"]
+      properties:
+        amount:
+          type: string
+          description: "Fiat amount as decimal string"
+        currency:
+          type: string
+        account_bank:
+          type: string
+        account_number:
+          type: string
+
+    WithdrawalResponse:
+      type: object
+      properties:
+        reference:
+          type: string
+          description: "Unique withdrawal reference (WIT-XXXXXXXX)"
+        status:
+          type: string
+          enum: ["pending", "completed", "failed"]
+
+    FiatDeposit:
+      type: object
+      properties:
+        id:
+          type: string
+        wallet_id:
+          type: string
+        provider:
+          type: string
+        provider_reference:
+          type: string
+        fiat_amount:
+          type: string
+        fiat_currency:
+          type: string
+        usdc_amount:
+          type: string
+        status:
+          type: string
+          enum: ["pending", "completed", "failed"]
+        created_at:
+          type: string
+          format: date-time
+
+    FiatWithdrawal:
+      type: object
+      properties:
+        id:
+          type: string
+        wallet_id:
+          type: string
+        provider:
+          type: string
+        provider_reference:
+          type: string
+        fiat_amount:
+          type: string
+        fiat_currency:
+          type: string
+        usdc_amount:
+          type: string
+        status:
+          type: string
+          enum: ["pending", "completed", "failed"]
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Transfers ─────────────────────────────────────────────────────────
+    CreateTransferRequest:
+      type: object
+      required: ["from_wallet_id", "to_wallet_id", "asset", "amount"]
+      properties:
+        from_wallet_id:
+          type: string
+          format: uuid
+        to_wallet_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+          description: "Asset code to transfer (e.g. USDC, XLM)"
+        amount:
+          type: string
+          description: "Positive decimal amount"
+
+    TransferResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        tx_hash:
+          type: string
+          description: "Stellar transaction hash (empty until submitted)"
+        type:
+          type: string
+          enum: ["transfer", "conversion", "funding"]
+        status:
+          type: string
+          enum: ["pending", "submitted", "confirmed", "failed", "reconciliation_failed"]
+        from_wallet_id:
+          type: string
+        to_wallet_id:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: string
+          description: "Gross amount as decimal string"
+        fee_amount:
+          type: string
+          description: "Fee deducted as decimal string"
+        net_amount:
+          type: string
+          description: "Amount after fee as decimal string"
+        fee_bps:
+          type: integer
+          description: "Fee in basis points"
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Batch ─────────────────────────────────────────────────────────────
+    CreateBatchRequest:
+      type: object
+      required: ["from_wallet_id", "transfers"]
+      properties:
+        from_wallet_id:
+          type: string
+          format: uuid
+        transfers:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/BatchItemRequest"
+
+    BatchItemRequest:
+      type: object
+      required: ["to_wallet_id", "asset", "amount"]
+      properties:
+        to_wallet_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+        amount:
+          type: string
+          description: "Positive decimal amount"
+        reference:
+          type: string
+          description: "Optional reference for this transfer"
+
+    BatchResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: ["pending", "processing", "partial", "completed", "failed"]
+        total_count:
+          type: integer
+        success_count:
+          type: integer
+        failed_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        transfers:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchTransferItem"
+
+    BatchTransferItem:
+      type: object
+      properties:
+        id:
+          type: string
+        to_wallet_id:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: string
+        reference:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: ["pending", "submitted", "confirmed", "failed"]
+        tx_hash:
+          type: string
+          nullable: true
+
+    # ── FX ────────────────────────────────────────────────────────────────
+    QuoteRequest:
+      type: object
+      required: ["from_asset", "to_asset", "amount"]
+      properties:
+        from_asset:
+          type: string
+        to_asset:
+          type: string
+        amount:
+          type: string
+          description: "Source amount as decimal string"
+
+    Quote:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Quote ID — use with POST /v1/fx/convert"
+        org_id:
+          type: string
+        from_asset:
+          type: string
+        to_asset:
+          type: string
+        from_amount:
+          type: string
+        to_amount:
+          type: string
+        rate:
+          type: string
+        fee:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        used:
+          type: boolean
+
+    ConvertRequest:
+      type: object
+      required: ["wallet_id", "quote_id"]
+      properties:
+        wallet_id:
+          type: string
+          format: uuid
+        quote_id:
+          type: string
+          format: uuid
+
+    ConversionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        wallet_id:
+          type: string
+        source_asset:
+          type: string
+        dest_asset:
+          type: string
+        source_amount:
+          type: string
+        dest_amount:
+          type: string
+        fee_amount:
+          type: string
+        fee_bps:
+          type: integer
+        rate:
+          type: string
+        tx_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    RateResponse:
+      type: object
+      properties:
+        rate:
+          type: string
+          description: "Effective rate after spread"
+        mid_market_rate:
+          type: string
+        spread_bps:
+          type: integer
+        provider:
+          type: string
+        cached_at:
+          type: string
+          format: date-time
+        stale:
+          type: boolean
+          description: "True if cached data is older than refresh interval"
+        source_amount:
+          type: string
+        dest_amount:
+          type: string
+        fee_amount:
+          type: string
+        net_amount:
+          type: string
+        fee_bps:
+          type: integer
+
+    # ── Schedules ─────────────────────────────────────────────────────────
+    CreateScheduleRequest:
+      type: object
+      required: ["from_wallet_id", "to_wallet_id", "asset", "amount", "frequency", "start_date"]
+      properties:
+        from_wallet_id:
+          type: string
+          format: uuid
+        to_wallet_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+        amount:
+          type: string
+          description: "Positive decimal amount"
+        frequency:
+          type: string
+          enum: ["daily", "weekly", "monthly"]
+        start_date:
+          type: string
+          format: date-time
+          description: "RFC3339 timestamp"
+        end_date:
+          type: string
+          format: date-time
+          description: "RFC3339 timestamp (optional)"
+
+    UpdateScheduleRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ["active", "paused"]
+          description: "Pause or resume the schedule"
+        amount:
+          type: string
+          description: "New amount as decimal string"
+        frequency:
+          type: string
+          enum: ["daily", "weekly", "monthly"]
+        end_date:
+          type: string
+          format: date-time
+
+    ScheduleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        from_wallet_id:
+          type: string
+        to_wallet_id:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: string
+        frequency:
+          type: string
+          enum: ["daily", "weekly", "monthly"]
+        next_run_at:
+          type: string
+          format: date-time
+        end_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: ["active", "paused", "cancelled", "completed"]
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Webhooks ──────────────────────────────────────────────────────────
+    RegisterWebhookRequest:
+      type: object
+      required: ["url"]
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - "transfer.initiated"
+              - "transfer.settled"
+              - "transfer.failed"
+              - "wallet.funded"
+              - "conversion.completed"
+          description: |
+            Event types to subscribe to. Omit or pass an empty array to
+            receive all events.
+
+    WebhookEndpointResponse:
+      type: object
+      description: "Returned on create — includes the signing secret"
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        secret:
+          type: string
+          description: "HMAC-SHA256 signing secret (shown once)"
+        events:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookEndpointSummary:
+      type: object
+      description: "Returned on list — secret is never included"
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        endpoint_id:
+          type: string
+        event_type:
+          type: string
+          enum:
+            - "transfer.initiated"
+            - "transfer.settled"
+            - "transfer.failed"
+            - "wallet.funded"
+            - "conversion.completed"
+        status:
+          type: string
+          enum: ["pending", "success", "failed"]
+        response_code:
+          type: integer
+          nullable: true
+          description: "HTTP status code from the endpoint"
+        attempt_count:
+          type: integer
+        last_attempt:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Fees ──────────────────────────────────────────────────────────────
+    FeeScheduleResponse:
+      type: object
+      properties:
+        transfer_fee_bps:
+          type: integer
+          description: "Transfer fee in basis points"
+        conversion_fee_bps:
+          type: integer
+          description: "FX conversion fee in basis points"
+        min_fee_amount:
+          type: string
+          description: "Minimum fee as decimal string"
+        max_fee_amount:
+          type: string
+          nullable: true
+          description: "Maximum fee cap as decimal string (null = uncapped)"
+        asset:
+          type: string
+          description: "Asset in which fees are denominated"
+
+    FeeCollectionSummary:
+      type: object
+      properties:
+        asset:
+          type: string
+        total_fees:
+          type: string
+        tenant_fees:
+          type: array
+          items:
+            $ref: "#/components/schemas/TenantFeeTotal"
+
+    TenantFeeTotal:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          nullable: true
+        total_fees:
+          type: string
+
+    # ── Usage ─────────────────────────────────────────────────────────────
+    UsageResponse:
+      type: object
+      properties:
+        total_requests:
+          type: integer
+          format: int64
+        requests_today:
+          type: integer
+          format: int64
+        transfers_count:
+          type: integer
+        conversions_count:
+          type: integer
+        batches_count:
+          type: integer
+
+    # ── Reconciliation ────────────────────────────────────────────────────
+    ReconciliationSummary:
+      type: object
+      properties:
+        days:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailySummaryRow"
+        total_ok:
+          type: integer
+        total_mismatch:
+          type: integer
+        total_not_found:
+          type: integer
+        pending_stuck:
+          type: integer
+          description: "Transactions stuck in pending beyond threshold"
+
+    DailySummaryRow:
+      type: object
+      properties:
+        date:
+          type: string
+          description: "Date in YYYY-MM-DD format"
+        ok:
+          type: integer
+          description: "Transactions reconciled successfully"
+        mismatch:
+          type: integer
+          description: "Transactions with amount/asset discrepancies"
+        not_found:
+          type: integer
+          description: "Transactions not found on Stellar"

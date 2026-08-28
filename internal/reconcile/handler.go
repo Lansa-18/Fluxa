@@ -19,6 +19,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) AdminRoutes() func(r chi.Router) {
 	return func(r chi.Router) {
 		r.Get("/reconciliation/summary", h.summary)
+		r.Post("/reconciliation/run", h.run)
 	}
 }
 
@@ -38,4 +39,16 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.JSON(w, http.StatusOK, summary)
+}
+
+func (h *Handler) run(w http.ResponseWriter, r *http.Request) {
+	summary, err := h.svc.GetSummary(r.Context(), 7)
+	if err != nil {
+		api.InternalError(w, err)
+		return
+	}
+	api.JSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":  "triggered",
+		"summary": summary,
+	})
 }

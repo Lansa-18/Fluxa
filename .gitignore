@@ -17,7 +17,7 @@ dist/
 *.test
 *.out
 vendor/
-go.sum
+# go.sum is explicitly committed for reproducible builds
 
 # IDE
 .vscode/
@@ -30,3 +30,21 @@ go.sum
 Thumbs.db
 
 .claude/
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+apps/web/.vercel/
+apps/web/node_modules/
+
+# SDK
+sdk/node_modules/
+sdk/dist/
+
+# Go coverage
+coverage.out
+coverage.html
+
+# Misc
+*.log
+.migrate/

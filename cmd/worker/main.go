@@ -8,20 +8,24 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/alerting"
+	"github.com/fluxa/fluxa/internal/assets"
 	"github.com/fluxa/fluxa/internal/config"
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/queue"
 	"github.com/fluxa/fluxa/internal/reconcile"
+	"github.com/fluxa/fluxa/internal/schedule"
 	"github.com/fluxa/fluxa/internal/settlement"
 	"github.com/fluxa/fluxa/internal/stellar"
 	"github.com/fluxa/fluxa/internal/transfer"
+	"github.com/fluxa/fluxa/internal/treasury"
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/shopspring/decimal"
 )
 
 func main() {
@@ -38,7 +42,8 @@ func main() {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	db, err := postgres.New(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -50,6 +55,9 @@ func main() {
 	txRepo := postgres.NewTransactionRepo(db)
 	feeRepo := postgres.NewFeeRepo(db)
 	webhookRepo := postgres.NewWebhookRepo(db)
+	reconcileRepo := postgres.NewReconcileRepo(db)
+	scheduleRepo := postgres.NewScheduleRepo(db)
+	treasuryRepo := postgres.NewTreasuryRepo(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -67,14 +75,55 @@ func main() {
 	idx := indexer.New(walletRepo, txRepo, stellarClient)
 	indexerWorker := indexer.NewWorker(idx)
 
+	// StreamAll keeps a live Horizon SSE connection open per wallet so new
+	// payments land in the DB in real time; the @every 30s indexer:sync task
+	// below is the incremental-poll fallback that also catches up any wallet
+	// whose stream is reconnecting.
+	go func() {
+		if err := idx.StreamAll(ctx, 1000, 0); err != nil {
+			log.Error().Err(err).Msg("indexer: stream all wallets failed")
+		}
+	}()
+
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
 	qClient := queue.NewClient(cfg.RedisURL)
 
-	reconcileSvc := reconcile.NewService(txRepo, stellarClient, alertClient, qClient, "fluxa-worker")
-	reconcileWorker := reconcile.NewWorker(reconcileSvc)
-
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
+
+	treasurySvc := treasury.NewService(
+		treasuryRepo, stellarClient, nil, webhookSvc,
+		cfg.PlatformFeeWalletPublicKey, cfg.StellarNetwork, cfg.TreasurySecretKey,
+		cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer,
+	)
+	treasuryWorker := treasury.NewWorker(treasurySvc)
+
+	transferSvc := transfer.NewService(txRepo, walletRepo, feeSvc, qClient)
+	scheduleWorker := schedule.NewWorker(scheduleRepo, transferSvc)
+
+	// Use 0 as the balance discrepancy threshold so any deviation is flagged.
+	// Override via BALANCE_DISCREPANCY_THRESHOLD env var if needed.
+	balanceThreshold := decimal.Zero
+	if cfg.BalanceDiscrepancyThreshold != "" {
+		if t, err := decimal.NewFromString(cfg.BalanceDiscrepancyThreshold); err == nil {
+			balanceThreshold = t
+		}
+	}
+
+	reconcileSvc := reconcile.NewService(
+		txRepo,
+		reconcileRepo,
+		walletRepo,
+		stellarClient,
+		alertClient,
+		qClient,
+		webhookSvc,
+		"fluxa-worker",
+		balanceThreshold,
+		assets.NewRegistry(cfg.StellarUSDCIssuer, cfg.StellarEURCIssuer),
+		cfg.PlatformFeeWalletPublicKey,
+	)
+	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
 	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
 
@@ -91,16 +140,46 @@ func main() {
 	mux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	mux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 	mux.HandleFunc(queue.TypeReconcile, reconcileWorker.HandleReconcile)
+	mux.HandleFunc(queue.TypeBalanceReconcile, reconcileWorker.HandleBalanceReconcile)
 	mux.HandleFunc(queue.TypeWebhookDeliver, webhookWorker.HandleDeliver)
+	mux.HandleFunc(queue.TypeRunSchedules, scheduleWorker.HandleRunSchedules)
+	mux.HandleFunc(queue.TypeTreasurySweep, treasuryWorker.HandleSweep)
 
 	scheduler := asynq.NewScheduler(redisOpt, nil)
+
 	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
 	if _, err := scheduler.Register("@every 30s", syncTask); err != nil {
 		log.Fatal().Err(err).Msg("register ledger sync scheduler")
 	}
-	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil)
+
+	// Reconciliation runs every 5 minutes in the low-priority queue so it does
+	// not compete with live settlement tasks.
+	reconcileTask := asynq.NewTask(queue.TypeReconcile, nil, asynq.Queue("low"))
 	if _, err := scheduler.Register("@every 5m", reconcileTask); err != nil {
 		log.Fatal().Err(err).Msg("register reconcile scheduler")
+	}
+
+	// Balance reconciliation runs once a day; discrepancies are flagged only —
+	// never auto-corrected.
+	balanceTask := asynq.NewTask(queue.TypeBalanceReconcile, nil, asynq.Queue("low"))
+	if _, err := scheduler.Register("@daily", balanceTask); err != nil {
+		log.Fatal().Err(err).Msg("register balance reconcile scheduler")
+	}
+
+	// Scheduled payouts are checked every minute — matches the acceptance
+	// window (fires within ±1 minute of next_run_at) without needing a
+	// dedicated ticker.
+	scheduleTask := asynq.NewTask(queue.TypeRunSchedules, nil)
+	if _, err := scheduler.Register("@every 1m", scheduleTask); err != nil {
+		log.Fatal().Err(err).Msg("register schedule run scheduler")
+	}
+
+	// Treasury sweep runs once a day; assets with auto_sweep_enabled = false
+	// are skipped by the worker itself, so disabling sweeping is effective
+	// immediately without touching this schedule.
+	treasurySweepTask := asynq.NewTask(queue.TypeTreasurySweep, nil, asynq.Queue("low"))
+	if _, err := scheduler.Register("@daily", treasurySweepTask); err != nil {
+		log.Fatal().Err(err).Msg("register treasury sweep scheduler")
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -121,9 +200,9 @@ func main() {
 
 	<-quit
 	log.Info().Msg("worker shutting down")
+	cancel() // stop indexer payment streams
 	srv.Shutdown()
 	scheduler.Shutdown()
 
-	_ = transfer.NewService
 	_ = wallet.NewService
 }
