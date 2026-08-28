@@ -123,8 +123,11 @@ func (s *service) GetQuote(ctx context.Context, fromAsset, toAsset, amount strin
 	}
 
 	fromAmt, err := decimal.NewFromString(amount)
-	if err != nil || fromAmt.IsZero() {
+	if err != nil {
 		return nil, domain.ErrInvalidAsset
+	}
+	if fromAmt.Sign() <= 0 {
+		return nil, domain.ErrInvalidQuoteAmount
 	}
 
 	toAmt := fromAmt.Mul(rateResp.Rate)
@@ -164,15 +167,18 @@ func (s *service) GetQuote(ctx context.Context, fromAsset, toAsset, amount strin
 }
 
 // ExecuteConversion fetches a quote by ID from Redis, validates it has not expired
-// or been used, atomically marks it used, and records the conversion.
+// or been used, verifies ownership, atomically marks it used, and records the conversion.
 func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID string) (*domain.Conversion, error) {
-	if _, err := s.walletRepo.GetByID(ctx, walletID); err != nil {
+	w, err := s.walletRepo.GetByID(ctx, walletID)
+	if err != nil {
 		return nil, err
 	}
 
 	result, err := markUsedScript.Run(ctx, s.redis, []string{quoteKeyPrefix + quoteID}).Result()
 	if err != nil {
-		switch err.Error() {
+		// Redis error replies may be prefixed with "ERR " by some clients.
+		msg := strings.TrimPrefix(err.Error(), "ERR ")
+		switch msg {
 		case "QUOTE_EXPIRED":
 			return nil, domain.ErrQuoteExpired
 		case "QUOTE_ALREADY_USED":
@@ -185,6 +191,21 @@ func (s *service) ExecuteConversion(ctx context.Context, walletID, quoteID strin
 	var q Quote
 	if err := json.Unmarshal([]byte(result.(string)), &q); err != nil {
 		return nil, fmt.Errorf("decode quote: %w", err)
+	}
+
+	// Ownership: quote tenant must match wallet tenant.
+	if w.TenantID == nil || q.OrgID != *w.TenantID {
+		return nil, domain.ErrQuoteOwnershipMismatch
+	}
+
+	// Expiry: reject if the quote has already expired server-side.
+	if !q.ExpiresAt.IsZero() && q.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, domain.ErrQuoteExpired
+	}
+
+	// Amount: reject non-positive quote amounts defensively.
+	if q.FromAmount.Sign() <= 0 || q.ToAmount.Sign() <= 0 {
+		return nil, domain.ErrInvalidQuoteAmount
 	}
 
 	conv := &domain.Conversion{
