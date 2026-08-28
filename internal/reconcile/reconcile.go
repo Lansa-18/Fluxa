@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -250,6 +251,11 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 	if horizonTx.Successful {
 		// On-chain confirmed but DB still shows pending → correct to confirmed.
 		if updateErr := s.repo.UpdateTxConfirmed(ctx, tx.ID, tx.TxHash); updateErr != nil {
+			if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
+				log.Warn().Str("tx_id", tx.ID).
+					Msg("reconcile: concurrent update already handled pending→confirmed")
+				return true, false, nil
+			}
 			return true, false, fmt.Errorf("update tx %s to confirmed: %w", tx.ID, updateErr)
 		}
 		log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).
@@ -260,6 +266,11 @@ func (s *Service) checkPendingTransaction(ctx context.Context, tx *domain.Transa
 
 	// On-chain failed but DB still shows pending → correct to failed.
 	if updateErr := s.repo.UpdateTxFailed(ctx, tx.ID); updateErr != nil {
+		if errors.Is(updateErr, domain.ErrConcurrentUpdate) {
+			log.Warn().Str("tx_id", tx.ID).
+				Msg("reconcile: concurrent update already handled pending→failed")
+			return true, false, nil
+		}
 		return true, false, fmt.Errorf("update tx %s to failed: %w", tx.ID, updateErr)
 	}
 	log.Info().Str("tx_id", tx.ID).Str("tx_hash", tx.TxHash).

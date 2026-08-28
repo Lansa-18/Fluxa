@@ -32,6 +32,7 @@ var (
 	ErrWebhookLimitReached          = errors.New("webhook registration limit reached for account type")
 	ErrInsufficientSweepableBalance = errors.New("sweep amount exceeds sweepable balance")
 	ErrTreasuryConfigNotFound       = errors.New("treasury config not found for asset")
+	ErrConcurrentUpdate            = errors.New("concurrent update: expected row was not modified")
 
 	ErrOwnerKeyRequired          = errors.New("owner public key is required to create a contract wallet")
 	ErrNotContractWallet         = errors.New("wallet is not a contract wallet")
