@@ -124,6 +124,11 @@ func New(
 				r.Route("/schedules", scheduleHandler.Routes())
 				r.Route("/fx", fxHandler.Routes())
 				r.Route("/fees", feeHandler.Routes())
+			})
+
+			// Administrative routes (Owner & Admin only)
+			r.Group(func(r chi.Router) {
+				r.Use(RequireRole(domain.RoleOwner, domain.RoleAdmin))
 				r.Route("/admin/fees", feeHandler.AdminRoutes())
 				r.Route("/admin/anchors", anchorHandler.AdminRoutes())
 				r.Route("/admin", reconcileHandler.AdminRoutes())
