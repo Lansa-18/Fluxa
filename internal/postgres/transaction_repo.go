@@ -581,26 +581,34 @@ func (r *TransactionRepo) GetPendingTxesForReconciliation(ctx context.Context, o
 
 // UpdateTxConfirmed transitions a pending transaction to confirmed. The WHERE
 // guard on status = 'pending' prevents double-correction if two reconcilers race.
+// Returns domain.ErrConcurrentUpdate when the row was already claimed.
 func (r *TransactionRepo) UpdateTxConfirmed(ctx context.Context, id, txHash string) error {
-	_, err := r.db.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE transactions SET status = 'confirmed', tx_hash = NULLIF($2, '') WHERE id = $1 AND status = 'pending'`,
 		id, txHash,
 	)
 	if err != nil {
 		return fmt.Errorf("update tx confirmed: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update tx confirmed: %w", domain.ErrConcurrentUpdate)
+	}
 	return nil
 }
 
 // UpdateTxFailed transitions a pending transaction to failed. The WHERE guard
 // on status = 'pending' prevents double-correction if two reconcilers race.
+// Returns domain.ErrConcurrentUpdate when the row was already claimed.
 func (r *TransactionRepo) UpdateTxFailed(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE transactions SET status = 'failed' WHERE id = $1 AND status = 'pending'`,
 		id,
 	)
 	if err != nil {
 		return fmt.Errorf("update tx failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update tx failed: %w", domain.ErrConcurrentUpdate)
 	}
 	return nil
 }
