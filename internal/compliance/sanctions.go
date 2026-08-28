@@ -45,7 +45,18 @@ func NewSanctionsSet() *SanctionsSet {
 }
 
 // Replace swaps in a freshly parsed list.
+//
+// An empty list is ignored rather than applied. The real SDN list always has
+// thousands of entries, so "empty" means either a fresh database before the
+// first refresh or a malformed download — and applying it would both wipe a
+// good set and mark the screener loaded, turning every subsequent screen into
+// a silent pass. Ignoring it keeps the set unloaded (or keeps the previous
+// one), which is what makes the screener fail closed.
 func (s *SanctionsSet) Replace(entities []*domain.SanctionsEntity, updatedAt time.Time) {
+	if len(entities) == 0 {
+		return
+	}
+
 	byAddress := make(map[string]string, len(entities))
 	names := make([]nameEntry, 0, len(entities))
 	seenName := make(map[string]struct{}, len(entities))

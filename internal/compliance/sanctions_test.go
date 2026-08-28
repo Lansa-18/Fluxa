@@ -198,3 +198,51 @@ func lower(s string) string {
 	}
 	return string(out)
 }
+
+// Regression: an empty sanctions list must not mark the set as loaded.
+//
+// A fresh database has no sanctions_entities rows, so the startup load
+// returns an empty slice. If that marked the set loaded, SanctionsScreener
+// would return clear for every destination and fail-closed would be defeated
+// exactly when it matters most — a new deployment before its first SDN
+// refresh.
+func TestEmptyListDoesNotMarkSetLoaded(t *testing.T) {
+	set := NewSanctionsSet()
+	set.Replace(nil, time.Now().UTC())
+
+	if set.Loaded() {
+		t.Fatal("an empty list marked the sanctions set as loaded")
+	}
+
+	_, err := NewSanctionsScreener(set, DefaultFuzzyThreshold).
+		Screen(context.Background(), domain.ScreeningRequest{ToPublicKey: cleanAddr})
+	if !errors.Is(err, ErrSanctionsSetNotLoaded) {
+		t.Fatalf("err = %v, want ErrSanctionsSetNotLoaded so screening fails closed", err)
+	}
+}
+
+// A failed refresh that yields nothing must not wipe a good set.
+func TestEmptyReplaceDoesNotDiscardALoadedSet(t *testing.T) {
+	set := sanctionsSetFixture(t)
+
+	set.Replace([]*domain.SanctionsEntity{}, time.Now().UTC())
+
+	if !set.Loaded() {
+		t.Fatal("an empty replace unloaded a previously loaded set")
+	}
+	if _, ok := set.MatchAddress(sanctionedAddr); !ok {
+		t.Fatal("an empty replace discarded the existing sanctions entries")
+	}
+}
+
+// The startup path specifically: loading from a repository backed by an empty
+// table must leave the screener failing closed.
+func TestLoadFromEmptyRepositoryLeavesSetUnloaded(t *testing.T) {
+	set := NewSanctionsSet()
+	if err := set.LoadFromRepository(context.Background(), newComplianceMockRepo()); err != nil {
+		t.Fatalf("LoadFromRepository: %v", err)
+	}
+	if set.Loaded() {
+		t.Fatal("loading from an empty table marked the set loaded")
+	}
+}

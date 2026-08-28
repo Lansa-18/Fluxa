@@ -87,7 +87,9 @@ func (w *Worker) HandleRefreshSanctions(ctx context.Context, _ *asynq.Task) erro
 func (w *Worker) refresh(ctx context.Context) (int, error) {
 	body, err := w.source.Fetch(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("fetch sdn list: %w", err)
+		// SDNSource already names the operation; wrapping again here would
+		// produce "fetch sdn list: fetch sdn list: ...".
+		return 0, err
 	}
 	defer body.Close()
 

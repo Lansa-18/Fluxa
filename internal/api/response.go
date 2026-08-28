@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/rs/zerolog/log"
 )
 
 type errorResponse struct {
@@ -42,6 +43,9 @@ func UnprocessableEntity(w http.ResponseWriter, code, message string) {
 }
 
 func InternalError(w http.ResponseWriter, err error) {
+	// The client deliberately gets an opaque message, but the cause has to go
+	// somewhere — without this an unexpected failure leaves no trace at all.
+	log.Error().Err(err).Msg("api: unhandled internal error")
 	Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an unexpected error occurred")
 }
 
