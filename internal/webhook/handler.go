@@ -127,6 +127,42 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type verifyRequest struct {
+	Secret    string `json:"secret"    validate:"required"`
+	Timestamp string `json:"timestamp" validate:"required"`
+	Body      string `json:"body"`
+	Signature string `json:"signature" validate:"required"`
+}
+
+type verifyResponse struct {
+	Valid  bool    `json:"valid"`
+	Reason *string `json:"reason"`
+}
+
+// Verify checks whether a signature/timestamp/body/secret combination is a
+// valid Fluxa webhook delivery, using the exact same algorithm documented
+// in docs/webhook-verification. Public and unauthenticated by design — it's
+// a debugging tool for developers integrating webhooks, not an operation on
+// any Fluxa resource — so it's rate-limited per-IP instead (VerifyRoutes).
+func (h *Handler) Verify(w http.ResponseWriter, r *http.Request) {
+	var req verifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		api.BadRequest(w, "invalid request body")
+		return
+	}
+	if err := api.Validate(req); err != nil {
+		api.BadRequest(w, err.Error())
+		return
+	}
+
+	result := Verify(req.Secret, req.Timestamp, req.Body, req.Signature)
+	resp := verifyResponse{Valid: result.Valid}
+	if result.Reason != "" {
+		resp.Reason = &result.Reason
+	}
+	api.JSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) ListDeliveries(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))

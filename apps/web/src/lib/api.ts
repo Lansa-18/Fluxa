@@ -123,6 +123,18 @@ export interface WebhookDelivery {
   created_at: string;
 }
 
+export interface VerifyWebhookSignatureRequest {
+  secret: string;
+  timestamp: string;
+  body: string;
+  signature: string;
+}
+
+export interface VerifyWebhookSignatureResponse {
+  valid: boolean;
+  reason: string | null;
+}
+
 export interface FeeCollectedSummary {
   collected?: Array<{
     asset: string;
@@ -364,6 +376,15 @@ class FluxaAPI {
 
   async listDeliveries(endpointId: string, limit = 20, offset = 0): Promise<{ deliveries: WebhookDelivery[] }> {
     return request(`/v1/webhooks/${endpointId}/deliveries?limit=${limit}&offset=${offset}`);
+  }
+
+  async verifyWebhookSignature(
+    data: VerifyWebhookSignatureRequest
+  ): Promise<VerifyWebhookSignatureResponse> {
+    return request('/v1/webhooks/verify', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 
   // Admin - Fee Collected

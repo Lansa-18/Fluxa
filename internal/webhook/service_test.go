@@ -45,9 +45,7 @@ func (m *mockRepo) List(_ context.Context, _ *string) ([]*domain.WebhookEndpoint
 	return out, nil
 }
 
-
-
-func (m *mockRepo) Delete(_ context.Context, id string) error {
+func (m *mockRepo) Delete(_ context.Context, id string, _ *string) error {
 	if _, ok := m.endpoints[id]; !ok {
 		return domain.ErrWebhookNotFound
 	}
@@ -85,7 +83,7 @@ func (m *mockRepo) UpdateDelivery(_ context.Context, d *domain.WebhookDelivery) 
 	return nil
 }
 
-func (m *mockRepo) GetDeliveryByID(_ context.Context, id string) (*domain.WebhookDelivery, error) {
+func (m *mockRepo) GetDeliveryByID(_ context.Context, id string, _ *string) (*domain.WebhookDelivery, error) {
 	d, ok := m.deliveries[id]
 	if !ok {
 		return nil, domain.ErrWebhookDeliveryNotFound
@@ -93,7 +91,7 @@ func (m *mockRepo) GetDeliveryByID(_ context.Context, id string) (*domain.Webhoo
 	return d, nil
 }
 
-func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int) ([]*domain.WebhookDelivery, error) {
+func (m *mockRepo) ListDeliveries(_ context.Context, endpointID string, _, _ int, _ *string) ([]*domain.WebhookDelivery, error) {
 	var out []*domain.WebhookDelivery
 	for _, d := range m.deliveries {
 		if d.EndpointID == endpointID {
@@ -147,9 +145,10 @@ func TestDelete_NotFound(t *testing.T) {
 func TestDispatchAndDeliver(t *testing.T) {
 	// Start a test HTTP server that records requests.
 	var received []byte
-	var receivedSig string
+	var receivedSig, receivedTimestamp string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSig = r.Header.Get("X-Fluxa-Signature")
+		receivedTimestamp = r.Header.Get("X-Fluxa-Timestamp")
 		json.NewDecoder(r.Body).Decode(&received)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -196,18 +195,31 @@ func TestDispatchAndDeliver(t *testing.T) {
 	if receivedSig == "" {
 		t.Fatal("expected X-Fluxa-Signature header")
 	}
+	if receivedTimestamp == "" {
+		t.Fatal("expected X-Fluxa-Timestamp header")
+	}
+	if got, want := receivedSig, sign(ep.Secret, receivedTimestamp, d.Payload); got != want {
+		t.Fatalf("signature = %s, want %s (signed over timestamp+\".\"+payload)", got, want)
+	}
+	if valid := Verify(ep.Secret, receivedTimestamp, string(d.Payload), receivedSig); !valid.Valid {
+		t.Fatalf("Verify() rejected a delivery this service just signed: %s", valid.Reason)
+	}
 }
 
 func TestSign_Deterministic(t *testing.T) {
 	secret := "test-secret"
+	timestamp := "1700000000"
 	payload := []byte(`{"event":"transfer.settled"}`)
-	sig1 := sign(secret, payload)
-	sig2 := sign(secret, payload)
+	sig1 := sign(secret, timestamp, payload)
+	sig2 := sign(secret, timestamp, payload)
 	if sig1 != sig2 {
 		t.Fatal("sign() is not deterministic")
 	}
 	if len(sig1) < 7 || sig1[:7] != "sha256=" {
 		t.Fatalf("signature format wrong: %s", sig1)
+	}
+	if otherTimestamp := sign(secret, "1700000001", payload); otherTimestamp == sig1 {
+		t.Fatal("sign() must produce a different signature for a different timestamp — the timestamp is part of the signed payload, not just a side-channel header")
 	}
 }
 

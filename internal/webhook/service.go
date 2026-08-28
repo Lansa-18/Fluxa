@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
@@ -203,7 +204,8 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 		return fmt.Errorf("validate webhook destination: %w", err)
 	}
 
-	sig := sign(ep.Secret, delivery.Payload)
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	sig := sign(ep.Secret, timestamp, delivery.Payload)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewReader(delivery.Payload))
 	if err != nil {
@@ -213,6 +215,7 @@ func (s *service) Deliver(ctx context.Context, deliveryID string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Fluxa-Signature", sig)
+	req.Header.Set("X-Fluxa-Timestamp", timestamp)
 	req.Header.Set("X-Fluxa-Event", string(delivery.EventType))
 
 	resp, err := s.client.Do(req)
@@ -254,9 +257,15 @@ func (s *service) loadDelivery(ctx context.Context, deliveryID string) (*domain.
 	return delivery, ep, nil
 }
 
-func sign(secret string, payload []byte) string {
+// sign computes the delivery signature over `timestamp + "." + payload`
+// (not the payload alone) so verifiers can reject stale/replayed
+// deliveries by checking the timestamp before trusting the signature —
+// see docs/webhook-verification for the verification algorithm this
+// must match exactly.
+func sign(secret, timestamp string, payload []byte) string {
+	signedPayload := append([]byte(timestamp+"."), payload...)
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
+	mac.Write(signedPayload)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 

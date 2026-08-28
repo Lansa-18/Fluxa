@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/table';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import { VerifySignatureTool } from '@/components/webhooks/verify-signature-tool';
 import { Webhook, Plus, X, Trash2 } from 'lucide-react';
 
 const eventOptions = [
@@ -282,6 +283,11 @@ export default function WebhooksPage() {
             </Table>
           )}
         </Card>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold">Verify Signature</h2>
+        <VerifySignatureTool />
       </div>
     </div>
   );
