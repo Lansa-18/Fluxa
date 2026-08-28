@@ -62,16 +62,16 @@ func HandleDomainError(w http.ResponseWriter, err error) {
 		NotFound(w, err.Error())
 	case errors.Is(err, domain.ErrSelfTransfer), errors.Is(err, domain.ErrInvalidAsset),
 		errors.Is(err, domain.ErrInsufficientBalance), errors.Is(err, domain.ErrSlippageExceeded),
-		errors.Is(err, domain.ErrFeeScheduleNotFound),
-		errors.Is(err, domain.ErrBatchTooLarge), errors.Is(err, domain.ErrBatchEmpty),
-		errors.Is(err, domain.ErrWalletLimitReached), errors.Is(err, domain.ErrTransferLimitReached),
-		errors.Is(err, domain.ErrWebhookLimitReached):
+		errors.Is(err, domain.ErrFeeScheduleNotFound), errors.Is(err, domain.ErrBatchTooLarge),
+		errors.Is(err, domain.ErrBatchEmpty), errors.Is(err, domain.ErrWalletLimitReached),
+		errors.Is(err, domain.ErrTransferLimitReached), errors.Is(err, domain.ErrWebhookLimitReached),
+		errors.Is(err, domain.ErrInvalidQuoteAmount):
 		BadRequest(w, err.Error())
 	case errors.Is(err, domain.ErrUserAlreadyExists):
 		Error(w, http.StatusConflict, "CONFLICT", err.Error())
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		Error(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
-	case errors.Is(err, domain.ErrForbidden):
+	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrQuoteOwnershipMismatch):
 		Error(w, http.StatusForbidden, "FORBIDDEN", err.Error())
 	case errors.Is(err, domain.ErrQuoteExpired):
 		UnprocessableEntity(w, "QUOTE_EXPIRED", err.Error())

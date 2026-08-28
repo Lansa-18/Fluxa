@@ -17,6 +17,8 @@ var (
 	ErrWebhookDeliveryNotFound      = errors.New("webhook delivery not found")
 	ErrQuoteExpired                 = errors.New("quote expired")
 	ErrQuoteAlreadyUsed             = errors.New("quote already used")
+	ErrQuoteOwnershipMismatch       = errors.New("quote does not belong to this tenant")
+	ErrInvalidQuoteAmount           = errors.New("quote amount must be positive")
 	ErrBatchNotFound                = errors.New("batch not found")
 	ErrBatchTooLarge                = errors.New("batch cannot contain more than 100 transfers")
 	ErrBatchEmpty                   = errors.New("batch must contain at least one transfer")
