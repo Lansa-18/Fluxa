@@ -116,6 +116,12 @@ func (f *fakeTransferRepo) GetByIdempotencyKey(_ context.Context, orgID, idempot
 func (f *fakeTransferRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
 	return f.existing[txHash], nil
 }
+func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
+	return 0, nil
+}
+func (f *fakeTransferRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
+	return f.Create(nil, tx)
+}
 
 func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
 	if f.existing[tx.TxHash] {

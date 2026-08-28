@@ -632,3 +632,49 @@ func (r *TransactionRepo) CountMonthlyTransfersByTenant(ctx context.Context, ten
 	}
 	return count, nil
 }
+
+// CreateWithMonthlyLimit atomically checks the tenant's monthly transfer count
+// and inserts the transaction in a single database transaction. This prevents
+// concurrent requests from exceeding the quota by serializing the count+insert.
+func (r *TransactionRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Transaction, tenantID string, year int, month time.Month, limit int) error {
+	dbTx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin limit-check tx: %w", err)
+	}
+	defer dbTx.Rollback(ctx)
+
+	startDate := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	endDate := startDate.AddDate(0, 1, 0)
+
+	var count int
+	err = dbTx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3 FOR UPDATE`,
+		tenantID, startDate, endDate,
+	).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("count monthly transfers: %w", err)
+	}
+
+	if count >= limit {
+		return domain.ErrTransferLimitReached
+	}
+
+	_, err = dbTx.Exec(ctx,
+		`INSERT INTO transactions (id, tx_hash, type, status, from_wallet, to_wallet, asset, amount, fee, fee_bps, tenant_id, created_at, requeue_count, reconciled_at, batch_id, reference, idempotency_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		tx.ID, nullableString(tx.TxHash), tx.Type, tx.Status,
+		nullableString(tx.FromWallet), nullableString(tx.ToWallet),
+		tx.Asset, tx.Amount.String(), tx.Fee.String(), nullableFeeBps(tx.FeeBps),
+		nullableUUID(tx.TenantID), tx.CreatedAt,
+		tx.RequeueCount, nullableTime(tx.ReconciledAt),
+		nullableUUID(tx.BatchID), nullableString(tx.Reference), nullableString(tx.IdempotencyKey),
+	)
+	if err != nil {
+		return fmt.Errorf("insert transaction: %w", err)
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit limit-check tx: %w", err)
+	}
+	return nil
+}

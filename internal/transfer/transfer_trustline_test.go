@@ -50,6 +50,9 @@ func (m *mockWalletRepo) UpdateSyncCursor(ctx context.Context, walletID, cursor 
 type mockTxRepo struct{}
 
 func (m *mockTxRepo) Create(ctx context.Context, tx *domain.Transaction) error { return nil }
+func (m *mockTxRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Transaction, tenantID string, year int, month time.Month, limit int) error {
+	return nil
+}
 func (m *mockTxRepo) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
 	return nil, nil
 }

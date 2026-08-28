@@ -51,6 +51,10 @@ func (f *fakeTxRepo) Create(_ context.Context, tx *domain.Transaction) error {
 	return nil
 }
 
+func (f *fakeTxRepo) CreateWithMonthlyLimit(_ context.Context, tx *domain.Transaction, _ string, _ int, _ time.Month, _ int) error {
+	return f.Create(nil, tx)
+}
+
 func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
@@ -59,7 +63,7 @@ func (f *fakeTxRepo) UpdateStatus(_ context.Context, id string, status domain.Tr
 	return nil
 }
 
-func (f *fakeTxRepo) GetByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Transaction, error) {
+func (f *fakeTxRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempotencyKey string) (*domain.Transaction, error) {
 	return nil, domain.ErrTransactionNotFound
 }
 
