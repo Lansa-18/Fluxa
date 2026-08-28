@@ -22,47 +22,90 @@ follow-on mock drift. Fixed on this branch so the plan's verification
 
 ## Phase 1 — Schema
 
-- [ ] `000022_add_compliance_hold_status.{up,down}.sql` (one-line ALTER TYPE, alone)
-- [ ] `000023_create_compliance_tables.{up,down}.sql` (4 tables + hot-path indexes)
+- [x] `000022_add_compliance_hold_status.{up,down}.sql` (one-line ALTER TYPE, alone)
+- [x] `000023_create_compliance_tables.{up,down}.sql` (4 tables + hot-path indexes)
 
 ## Phase 2 — Domain
 
-- [ ] `domain.StatusComplianceHold`
-- [ ] `domain/compliance.go` — review/block/sanctions types + screening request/decision
-- [ ] 3 sentinel errors + `HandleDomainError` arms (403 `TRANSFER_BLOCKED_SANCTIONS`)
-- [ ] 4 webhook event types
+- [x] `domain.StatusComplianceHold`
+- [x] `domain/compliance.go` — review/block/sanctions types + screening request/decision
+- [x] 3 sentinel errors + `HandleDomainError` arms (403 `TRANSFER_BLOCKED_SANCTIONS`)
+- [x] 4 webhook event types
 
 ## Phase 3 — `internal/compliance/`
 
-- [ ] `screener.go` — interface, composite, precedence blocked > hold > clear
-- [ ] `levenshtein.go` — distance-capped edit distance
-- [ ] `sanctions.go` — `SanctionsSet` + `SanctionsScreener`
-- [ ] `sdn.go` — `SDNSource` + streaming XML parser
-- [ ] `velocity.go` — velocity / structuring / round-trip
-- [ ] `repository.go`, `service.go`, `handler.go`, `worker.go`
-- [ ] `testdata/sdn_sample.xml`
+- [x] `screener.go` — interface, composite, precedence blocked > hold > clear
+- [x] `levenshtein.go` — distance-capped edit distance
+- [x] `sanctions.go` — `SanctionsSet` + `SanctionsScreener`
+- [x] `sdn.go` — `SDNSource` + streaming XML parser
+- [x] `velocity.go` — velocity / structuring / round-trip
+- [x] `repository.go`, `service.go`, `handler.go`, `worker.go`
+- [x] `testdata/sdn_sample.xml`
 
 ## Phase 4 — Integration
 
-- [ ] `internal/postgres/compliance_repo.go` (tenant-scoped)
-- [ ] `transfer/service.go` — screen in `initiate()`, `WithScreener` builder
-- [ ] `queue` task type + enqueue helper
-- [ ] `server.go` mount at `/admin/compliance`
-- [ ] `cmd/api` + `cmd/worker` wiring
-- [ ] config + `.env.example`
-- [ ] batch `aggregateStatus` — explicit `compliance_hold` arm
+- [x] `internal/postgres/compliance_repo.go` (tenant-scoped)
+- [x] `transfer/service.go` — screen in `initiate()`, `WithScreener` builder
+- [x] `queue` task type + enqueue helper
+- [x] `server.go` mount at `/admin/compliance`
+- [x] `cmd/api` + `cmd/worker` wiring
+- [x] config + `.env.example`
+- [x] batch `aggregateStatus` — explicit `compliance_hold` arm
 
 ## Phase 5 — Tests (acceptance criteria)
 
-- [ ] Sanctioned address → 403, zero enqueues
-- [ ] 3×999 holds, 3×1000 does not
-- [ ] SDN refresh parses + records update row
-- [ ] Approve resets to `pending` AND enqueues
-- [ ] Hold does not block the org's other transfers
-- [ ] Fuzzy federation match → hold, not blocked
-- [ ] Composite precedence, fail-closed, refresh_failed webhook
-- [ ] `compliance_hold` invisible to reconciliation
+- [x] Sanctioned address → 403, zero enqueues
+- [x] 3×999 holds, 3×1000 does not
+- [x] SDN refresh parses + records update row
+- [x] Approve resets to `pending` AND enqueues
+- [x] Hold does not block the org's other transfers
+- [x] Fuzzy federation match → hold, not blocked
+- [x] Composite precedence, fail-closed, refresh_failed webhook
+- [x] `compliance_hold` invisible to reconciliation
 
 ## Phase 6 — Docs
 
-- [ ] `docs/errors.md`, `docs/openapi.yaml`, `README.md`, `ASSUMPTIONS.md`
+- [x] `docs/errors.md`, `docs/openapi.yaml`, `README.md`, `ASSUMPTIONS.md`
+
+---
+
+## Review
+
+**Delivered.** Screening runs in `transfer.service.initiate()`, covering the
+API, batch and scheduled-payout paths from one call site.
+
+Verification (all run, all green):
+
+```
+go build ./...                       clean
+go vet ./...                         clean
+go test ./... -race -count=1         20 packages, 0 failures
+apps/web: npm run lint / build       clean (1 pre-existing warning)
+sdk: npm run typecheck / build       clean
+```
+
+58 tests in `internal/compliance`, 13 more covering screening in
+`internal/transfer`.
+
+### Deviations from plan.md
+
+- **Phase 0 was not in the plan.** `main` did not compile. Repaired 8 build
+  errors plus test-mock drift across 5 packages before any of this could be
+  verified. See ASSUMPTIONS.md.
+- **`docs/fluxa.postman_collection.json` and `apps/web/src/lib/api.ts`** were
+  updated too — CLAUDE.md's cross-cutting rule requires it and the plan's file
+  list omitted them. No dashboard pages were added; the issue didn't ask.
+- **Reconciler guard added.** The plan wanted a test asserting held rows are
+  invisible to reconciliation. That invariant lived only in SQL, which the
+  tests cannot reach, so `RecoverPending` now skips `compliance_hold`
+  explicitly — making it testable and refactor-proof.
+- **`held_count` added to the batch response** alongside the new
+  `compliance_hold` aggregate status, so a partially-held batch is legible.
+
+### Known gap
+
+`ScreeningRequest.ToFederation` is always empty: `domain.Wallet` has no
+counterparty-name field, so the fuzzy name rule cannot fire in production. It
+is implemented and unit-tested and starts working as soon as a name reaches
+the screener. Closing it needs a wallet-name migration the issue didn't ask
+for. Recorded in ASSUMPTIONS.md.
