@@ -15,6 +15,11 @@ const (
 	StatusConfirmed            TransactionStatus = "confirmed"
 	StatusFailed               TransactionStatus = "failed"
 	StatusReconciliationFailed TransactionStatus = "reconciliation_failed"
+	// StatusComplianceHold marks a transfer that passed validation but was
+	// stopped by screening. It is never enqueued for settlement; an approval
+	// must reset it to StatusPending first, because settlement.Engine
+	// silently no-ops on any status other than pending.
+	StatusComplianceHold TransactionStatus = "compliance_hold"
 
 	TypeTransfer   TransactionType = "transfer"
 	TypeConversion TransactionType = "conversion"

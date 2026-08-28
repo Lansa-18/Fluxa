@@ -35,6 +35,10 @@ func (f *fakeTransferSvc) InitiateBatchTransfer(_ context.Context, fromID, toID,
 	return &domain.Transaction{ID: "tx-1"}, nil
 }
 
+func (f *fakeTransferSvc) WithScreener(_ transfer.Screener) transfer.Service {
+	return f
+}
+
 func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
 	return f
 }

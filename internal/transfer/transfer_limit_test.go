@@ -71,7 +71,7 @@ func (m *limitMockTxRepo) GetByIdempotencyKey(_ context.Context, _, _ string) (*
 
 type limitMockWalletRepo struct{}
 
-func (m *limitMockWalletRepo) Create(_ context.Context, _ *domain.Wallet) error         { return nil }
+func (m *limitMockWalletRepo) Create(_ context.Context, _ *domain.Wallet) error { return nil }
 func (m *limitMockWalletRepo) GetByID(_ context.Context, id string) (*domain.Wallet, error) {
 	return &domain.Wallet{ID: id, PublicKey: "G" + id}, nil
 }
@@ -109,7 +109,9 @@ func (m *limitMockFeeSvc) CalculateTransferFee(_ context.Context, _, _ string, _
 func (m *limitMockFeeSvc) CalculateConversionFee(_ context.Context, _, _ string, _ decimal.Decimal) (*fees.TransferFee, error) {
 	return &fees.TransferFee{FeeAmount: decimal.Zero, NetAmount: decimal.NewFromInt(10), FeeBps: 0}, nil
 }
-func (m *limitMockFeeSvc) RecordCollection(_ context.Context, _ *domain.FeeCollection) error { return nil }
+func (m *limitMockFeeSvc) RecordCollection(_ context.Context, _ *domain.FeeCollection) error {
+	return nil
+}
 func (m *limitMockFeeSvc) ListCollectedSummary(_ context.Context, _, _ *time.Time) ([]domain.FeeCollectionSummary, error) {
 	return nil, nil
 }
@@ -306,5 +308,3 @@ func TestConcurrentTransfersExactBoundary(t *testing.T) {
 		t.Errorf("failures = %d, want %d", failures, goroutines-limit)
 	}
 }
-
-

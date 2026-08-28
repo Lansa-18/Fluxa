@@ -80,7 +80,7 @@ func (s *service) InitiateDeposit(ctx context.Context, req DepositRequest) (*Dep
 }
 
 func (s *service) InitiateWithdrawal(ctx context.Context, req WithdrawRequest) (*WithdrawResponse, error) {
-	// For withdrawal, user provides Fiat amount they want to receive. 
+	// For withdrawal, user provides Fiat amount they want to receive.
 	// Get live exchange rate from FX service. We fetch the quote for 1 USDC to determine the rate.
 	quote, err := s.fxSvc.GetQuote(ctx, "USDC", req.FiatCurrency, "1")
 	if err != nil {

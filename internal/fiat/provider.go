@@ -57,10 +57,10 @@ type (
 )
 
 const (
-	EventDepositConfirmed  = "deposit.confirmed"
-	EventDepositFailed     = "deposit.failed"
-	EventWithdrawalSent    = "withdrawal.sent"
-	EventWithdrawalFailed  = "withdrawal.failed"
+	EventDepositConfirmed = "deposit.confirmed"
+	EventDepositFailed    = "deposit.failed"
+	EventWithdrawalSent   = "withdrawal.sent"
+	EventWithdrawalFailed = "withdrawal.failed"
 )
 
 type Provider interface {

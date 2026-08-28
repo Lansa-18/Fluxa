@@ -111,17 +111,17 @@ type WalletLookup interface {
 }
 
 type Service struct {
-	repo               Repository
-	walletRepo         WalletRepository
-	walletLookup       WalletLookup
-	stellar            stellar.Client
-	alerting           *alerting.Client
-	queue              *queue.Client
-	webhookSvc         webhook.Service
-	svcName            string
-	balanceThreshold   decimal.Decimal
-	assetRegistry      *assets.Registry
-	platformFeeWallet  string
+	repo              Repository
+	walletRepo        WalletRepository
+	walletLookup      WalletLookup
+	stellar           stellar.Client
+	alerting          *alerting.Client
+	queue             *queue.Client
+	webhookSvc        webhook.Service
+	svcName           string
+	balanceThreshold  decimal.Decimal
+	assetRegistry     *assets.Registry
+	platformFeeWallet string
 }
 
 func NewService(
@@ -583,6 +583,17 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 	log.Info().Int("count", len(txes)).Msg("reconcile: recovering stuck pending transactions")
 
 	for _, tx := range txes {
+		// Defence in depth. GetStuckPendingTxes already filters on
+		// status = 'pending', but a held transfer is waiting on a human, not
+		// stuck, and re-enqueuing one would release a payment compliance
+		// deliberately stopped. Re-asserting it here means a change to that
+		// query cannot quietly turn into a compliance bypass.
+		if tx.Status == domain.StatusComplianceHold {
+			log.Warn().Str("tx_id", tx.ID).
+				Msg("reconcile: skipping transaction held for compliance review")
+			continue
+		}
+
 		newCount, err := s.repo.IncrementRequeueCount(ctx, tx.ID)
 		if err != nil {
 			log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: increment requeue count")
@@ -667,7 +678,7 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 	}
 
 	for asset := range assets {
-		dbAmt := dbBalances[asset]       // zero-value decimal if key absent
+		dbAmt := dbBalances[asset] // zero-value decimal if key absent
 		horizonAmt := horizonBalances[asset]
 		diff := dbAmt.Sub(horizonAmt).Abs()
 		if diff.LessThanOrEqual(s.balanceThreshold) {

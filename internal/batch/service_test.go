@@ -131,6 +131,10 @@ func (f *fakeTransferSvc) InitiateBatchTransfer(ctx context.Context, fromID, toI
 	return tx, nil
 }
 
+func (f *fakeTransferSvc) WithScreener(_ transfer.Screener) transfer.Service {
+	return f
+}
+
 func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
 	return f
 }

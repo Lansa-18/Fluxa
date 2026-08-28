@@ -21,11 +21,11 @@ import (
 // ─── Mocks ─────────────────────────────────────────────────────────────
 
 type mockRepo struct {
-	txes               []*domain.Transaction
-	updateConfirmedErr error
-	updateFailedErr    error
+	txes                []*domain.Transaction
+	updateConfirmedErr  error
+	updateFailedErr     error
 	updateConfStatusErr error
-	auditLogs          []*AuditLogEntry
+	auditLogs           []*AuditLogEntry
 }
 
 func (m *mockRepo) GetConfirmedTxesForReconciliation(_ context.Context, _ time.Duration) ([]*domain.Transaction, error) {
@@ -650,11 +650,11 @@ func TestCheckWalletBalance_TwoIssuersSameCodeDiscrepancyOnOne(t *testing.T) {
 	}
 
 	acct := horizon.Account{
-		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
+		Balances: []horizon.Balance{{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
 			// Issuer B: Horizon has 150 but DB has 200.
 			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerB}, Balance: "150.0000000"},
-			},
-		}
+		},
+	}
 
 	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
 	wr := &mockWalletRepo{
@@ -692,9 +692,8 @@ func TestCheckWalletBalance_NativeXLM(t *testing.T) {
 	}
 
 	acct := horizon.Account{
-		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "native"}, Balance: "500.0000000"},
-			},
-		}
+		Balances: []horizon.Balance{{Asset: base.Asset{Type: "native"}, Balance: "500.0000000"}},
+	}
 
 	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
 	wr := &mockWalletRepo{
@@ -721,9 +720,8 @@ func TestCheckWalletBalance_NativeXLMDiscrepancy(t *testing.T) {
 	}
 
 	acct := horizon.Account{
-		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "native"}, Balance: "450.0000000"},
-			},
-		}
+		Balances: []horizon.Balance{{Asset: base.Asset{Type: "native"}, Balance: "450.0000000"}},
+	}
 
 	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
 	wr := &mockWalletRepo{
@@ -758,10 +756,10 @@ func TestCheckWalletBalance_DBAbsentIssuerNotCollapsed(t *testing.T) {
 	}
 
 	acct := horizon.Account{
-		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
+		Balances: []horizon.Balance{{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
 			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerB}, Balance: "50.0000000"},
-			},
-		}
+		},
+	}
 
 	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
 	wr := &mockWalletRepo{
