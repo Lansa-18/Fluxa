@@ -231,7 +231,8 @@ func main() {
 			},
 		).WithTenantRepo(tenantRepo)
 		contractSvc.WithSigner(signer)
-		walletHandler = walletHandler.WithContractService(contractSvc)
+		walletHandler = walletHandler.WithContractService(contractSvc).
+			WithGuardianGate(server.RequireRole(domain.RoleOwner, domain.RoleAdmin))
 	}
 	transferHandler := transfer.NewHandler(transferSvc).WithIdempotency(idemMW)
 	fxHandler := fx.NewHandler(fxSvc).WithIdempotency(idemMW)

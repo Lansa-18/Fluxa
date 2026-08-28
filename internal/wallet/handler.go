@@ -9,9 +9,10 @@ import (
 )
 
 type Handler struct {
-	svc         Service
-	contractSvc ContractService
-	idem        func(http.Handler) http.Handler
+	svc          Service
+	contractSvc  ContractService
+	idem         func(http.Handler) http.Handler
+	guardianGate func(http.Handler) http.Handler
 }
 
 func NewHandler(svc Service) *Handler {
@@ -33,6 +34,16 @@ func (h *Handler) WithIdempotency(mw func(http.Handler) http.Handler) *Handler {
 	return h
 }
 
+// WithGuardianGate attaches middleware (e.g. a role check) to the
+// guardian and time-lock mutation routes only (POST/DELETE /{id}/guardians,
+// POST /{id}/time-lock). These control the contract wallet's recovery and
+// spending-freeze mechanisms, so they get the same Owner/Admin-only gating
+// applied to /v1/keys and /v1/org.
+func (h *Handler) WithGuardianGate(mw func(http.Handler) http.Handler) *Handler {
+	h.guardianGate = mw
+	return h
+}
+
 func (h *Handler) Routes() func(r chi.Router) {
 	return func(r chi.Router) {
 		post := r.Post
@@ -47,9 +58,15 @@ func (h *Handler) Routes() func(r chi.Router) {
 		if h.contractSvc != nil {
 			r.Get("/{id}/contract-state", h.getContractState)
 			r.Get("/{id}/spending-status", h.getSpendingStatus)
-			r.Post("/{id}/guardians", h.addGuardian)
-			r.Delete("/{id}/guardians/{address}", h.removeGuardian)
-			r.Post("/{id}/time-lock", h.setTimeLock)
+
+			guardianPost, guardianDelete := r.Post, r.Delete
+			if h.guardianGate != nil {
+				guardianPost = r.With(h.guardianGate).Post
+				guardianDelete = r.With(h.guardianGate).Delete
+			}
+			guardianPost("/{id}/guardians", h.addGuardian)
+			guardianDelete("/{id}/guardians/{address}", h.removeGuardian)
+			guardianPost("/{id}/time-lock", h.setTimeLock)
 		}
 	}
 }
