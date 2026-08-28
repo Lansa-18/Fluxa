@@ -132,9 +132,6 @@ func (f *fakeTransferRepo) UpsertByTxHash(_ context.Context, tx *domain.Transact
 	return nil
 }
 
-func (f *fakeTransferRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
-	return 0, nil
-}
 
 type fakeStellarClient struct {
 	loadAccount    func(accountID string) (horizon.Account, error)
@@ -169,10 +166,6 @@ func (f *fakeStellarClient) Payments(accountID, cursor string, limit uint) ([]op
 	if f.payments != nil {
 		return f.payments(accountID, cursor, limit)
 	}
-	return nil, nil
-}
-
-func (f *fakeStellarClient) PaymentsForAccount(accountID string, cursor string, limit int) ([]horizon.Payment, error) {
 	return nil, nil
 }
 

@@ -121,7 +121,6 @@ func (r *TransactionRepo) GetByIdempotencyKey(ctx context.Context, orgID, idempo
 	var tenantID *string
 	var batchID *string
 	var reference string
-	var localAmt *string
 
 	query := `SELECT id, COALESCE(tx_hash,''), type, status,
 		        COALESCE(from_wallet::text,''), COALESCE(to_wallet::text,''),

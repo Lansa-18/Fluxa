@@ -19,7 +19,6 @@ import (
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fiat/flutterwave"
-	"github.com/fluxa/fluxa/internal/fiat/yellowcard"
 	"github.com/fluxa/fluxa/internal/fx"
 	"github.com/fluxa/fluxa/internal/indexer"
 	"github.com/fluxa/fluxa/internal/org"
@@ -136,10 +135,13 @@ func main() {
 	)
 	walletSvc.WithFXService(fxSvc)
 
+	// fiat.Service drives exactly one rail. Flutterwave is the live provider;
+	// the Yellow Card provider is implemented (internal/fiat/yellowcard) but
+	// not wired, because fiat.NewService takes a single Rail and there is no
+	// per-request provider selection yet.
 	fwProvider := flutterwave.NewProvider(cfg.FlutterwaveSecretKey, cfg.FlutterwaveWebhookHash)
-	ycProvider := yellowcard.NewProvider(cfg.YellowCardAPIKey, cfg.YellowCardWebhookKey, cfg.YellowCardSandbox)
 
-	fiatSvc := fiat.NewService(fiatRepo, []fiat.Provider{fwProvider, ycProvider}, fxSvc, transferSvc, cfg.PlatformWalletID)
+	fiatSvc := fiat.NewService(fiatRepo, fiat.NewRailAdapter(fwProvider), fxSvc, transferSvc, cfg.PlatformWalletID, "flutterwave")
 
 	anchorRegistry := anchor.NewRegistry(anchorRepo, nil)
 	if err := anchorRegistry.Load(ctx); err != nil {

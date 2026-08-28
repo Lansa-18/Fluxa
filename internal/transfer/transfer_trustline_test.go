@@ -62,6 +62,10 @@ func (m *mockTxRepo) UpdateStatus(ctx context.Context, id string, status domain.
 func (m *mockTxRepo) ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
 	return nil, nil
 }
+func (m *mockTxRepo) UpsertByTxHash(_ context.Context, _ *domain.Transaction) error {
+	return nil
+}
+
 func (m *mockTxRepo) ExistsByTxHash(ctx context.Context, txHash string) (bool, error) {
 	return false, nil
 }

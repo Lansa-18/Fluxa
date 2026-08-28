@@ -58,6 +58,10 @@ func (m *limitMockTxRepo) ListByBatch(_ context.Context, _ string) ([]*domain.Tr
 func (m *limitMockTxRepo) CountMonthlyTransfersByTenant(_ context.Context, _ string, _ int, _ time.Month) (int, error) {
 	return int(m.count.Load()), nil
 }
+func (m *limitMockTxRepo) UpsertByTxHash(_ context.Context, _ *domain.Transaction) error {
+	return nil
+}
+
 func (m *limitMockTxRepo) ExistsByTxHash(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }

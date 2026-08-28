@@ -39,6 +39,15 @@ type Transaction struct {
 	ReconciledAt   *time.Time
 	RequeueCount   int
 	IdempotencyKey string
+
+	// Fiat leg metadata, set only for transfers that settle a deposit or
+	// withdrawal through a fiat rail. All nullable — a pure on-chain
+	// transfer leaves every one of them nil.
+	FiatRail        *string
+	FiatProviderRef *string
+	FiatStatus      *string
+	LocalCurrency   *string
+	LocalAmount     *decimal.Decimal
 }
 
 func (t *Transaction) NetAmount() decimal.Decimal {

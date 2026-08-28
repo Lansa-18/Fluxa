@@ -133,7 +133,7 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 	}
 
 	if evt.Type == "deposit" || evt.Type == "charge.completed" {
-		deposit, err := s.repo.GetDepositByReference(ctx, evt.Reference)
+		deposit, err := s.repo.GetDepositByReference(ctx, evt.ProviderRef)
 		if err != nil {
 			return fmt.Errorf("get deposit by ref: %w", err)
 		}
@@ -164,7 +164,7 @@ func (s *service) HandleWebhook(ctx context.Context, payload []byte, signature s
 		}
 
 	} else if evt.Type == "withdraw" || evt.Type == "transfer.completed" {
-		withdrawal, err := s.repo.GetWithdrawalByReference(ctx, evt.Reference)
+		withdrawal, err := s.repo.GetWithdrawalByReference(ctx, evt.ProviderRef)
 		if err != nil {
 			return fmt.Errorf("get withdrawal by ref: %w", err)
 		}

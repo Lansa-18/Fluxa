@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/fluxa/fluxa/internal/domain"
+	"github.com/fluxa/fluxa/internal/stellar"
+	"github.com/fluxa/fluxa/internal/transfer"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -75,6 +77,10 @@ func (f *fakeTxRepo) ListByBatch(_ context.Context, batchID string) ([]*domain.T
 	return f.byBatch[batchID], nil
 }
 
+func (f *fakeTxRepo) UpsertByTxHash(_ context.Context, _ *domain.Transaction) error {
+	return nil
+}
+
 func (f *fakeTxRepo) ExistsByTxHash(_ context.Context, txHash string) (bool, error) {
 	return false, nil
 }
@@ -123,6 +129,10 @@ func (f *fakeTransferSvc) InitiateBatchTransfer(ctx context.Context, fromID, toI
 	}
 	_ = f.txRepo.Create(ctx, tx)
 	return tx, nil
+}
+
+func (f *fakeTransferSvc) WithStellarClient(_ stellar.Client) transfer.Service {
+	return f
 }
 
 func (f *fakeTransferSvc) GetTransaction(_ context.Context, id string) (*domain.Transaction, error) {
