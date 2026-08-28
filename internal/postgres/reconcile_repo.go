@@ -42,11 +42,12 @@ func (r *ReconcileRepo) ListAllWallets(ctx context.Context) ([]*domain.Wallet, e
 	return wallets, rows.Err()
 }
 
-// GetDBBalances returns all balances for a wallet keyed by asset code (e.g. "XLM",
-// "USDC"). An asset absent from the table is represented as zero.
+// GetDBBalances returns all balances for a wallet keyed by canonical asset
+// identity: "XLM" for native assets, "CODE:ISSUER" for credit assets. This
+// ensures two issuers sharing the same asset code are compared independently.
 func (r *ReconcileRepo) GetDBBalances(ctx context.Context, walletID string) (map[string]decimal.Decimal, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT asset_code, balance FROM balances WHERE wallet_id = $1`,
+		`SELECT asset_code, issuer, balance FROM balances WHERE wallet_id = $1`,
 		walletID,
 	)
 	if err != nil {
@@ -56,12 +57,16 @@ func (r *ReconcileRepo) GetDBBalances(ctx context.Context, walletID string) (map
 
 	balances := make(map[string]decimal.Decimal)
 	for rows.Next() {
-		var assetCode, balance string
-		if err := rows.Scan(&assetCode, &balance); err != nil {
+		var assetCode, issuer, balance string
+		if err := rows.Scan(&assetCode, &issuer, &balance); err != nil {
 			return nil, err
 		}
 		amt, _ := decimal.NewFromString(balance)
-		balances[assetCode] = amt
+		key := assetCode
+		if issuer != "" {
+			key = assetCode + ":" + issuer
+		}
+		balances[key] = amt
 	}
 	return balances, rows.Err()
 }

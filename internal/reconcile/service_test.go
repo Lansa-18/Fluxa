@@ -13,6 +13,7 @@ import (
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/shopspring/decimal"
 	"github.com/stellar/go/protocols/horizon"
+	"github.com/stellar/go/protocols/horizon/base"
 	"github.com/stellar/go/protocols/horizon/operations"
 	"github.com/stellar/go/txnbuild"
 )
@@ -539,4 +540,253 @@ func (s *hashSwitchStellar) StreamPayments(_ context.Context, _, _ string, _ fun
 }
 func (s *hashSwitchStellar) Offers(_ string, _ uint) ([]horizon.Offer, error) {
 	return nil, nil
+}
+
+// ─── Mocks for balance reconciliation ──────────────────────────────────
+
+type mockWalletRepo struct {
+	wallets  []*domain.Wallet
+	balances map[string]map[string]decimal.Decimal // walletID → assetKey → balance
+	discreps []*BalanceDiscrepancy
+}
+
+func (m *mockWalletRepo) ListAllWallets(_ context.Context) ([]*domain.Wallet, error) {
+	return m.wallets, nil
+}
+func (m *mockWalletRepo) GetDBBalances(_ context.Context, walletID string) (map[string]decimal.Decimal, error) {
+	if m.balances == nil {
+		return make(map[string]decimal.Decimal), nil
+	}
+	return m.balances[walletID], nil
+}
+func (m *mockWalletRepo) WriteBalanceDiscrepancy(_ context.Context, d *BalanceDiscrepancy) error {
+	m.discreps = append(m.discreps, d)
+	return nil
+}
+
+type balanceStellarClient struct {
+	accounts map[string]horizon.Account // publicKey → account
+}
+
+func (s *balanceStellarClient) LoadAccount(publicKey string) (horizon.Account, error) {
+	if acct, ok := s.accounts[publicKey]; ok {
+		return acct, nil
+	}
+	return horizon.Account{}, fmt.Errorf("account not found: %s", publicKey)
+}
+func (s *balanceStellarClient) TransactionDetail(_ string) (horizon.Transaction, error) {
+	return horizon.Transaction{}, nil
+}
+func (s *balanceStellarClient) OperationsForTransaction(_ string) ([]operations.Operation, error) {
+	return nil, nil
+}
+func (s *balanceStellarClient) SubmitTransaction(_ *txnbuild.Transaction) (horizon.Transaction, error) {
+	return horizon.Transaction{}, nil
+}
+func (s *balanceStellarClient) FindPathsStrict(_, _, _, _ string) ([]horizon.Path, error) {
+	return nil, nil
+}
+func (s *balanceStellarClient) Payments(_, _ string, _ uint) ([]operations.Operation, error) {
+	return nil, nil
+}
+func (s *balanceStellarClient) StreamPayments(_ context.Context, _, _ string, _ func(operations.Operation) error) error {
+	return nil
+}
+func (s *balanceStellarClient) Offers(_ string, _ uint) ([]horizon.Offer, error) {
+	return nil, nil
+}
+
+// ─── Tests: balance reconciliation with canonical asset identity ────────
+
+func TestCheckWalletBalance_TwoIssuersSameCodeIndependent(t *testing.T) {
+	// Two issuers share asset code "USDC". DB has them as separate entries
+	// keyed by "USDC:ISSUER_A" and "USDC:ISSUER_B". Horizon also has both.
+	// No discrepancy should be flagged.
+	issuerA := "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACODEA"
+	issuerB := "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBICODEB"
+
+	wallet := &domain.Wallet{ID: "w1", PublicKey: "GWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+
+	dbBalances := map[string]decimal.Decimal{
+		"USDC:" + issuerA: decimal.RequireFromString("100.0000000"),
+		"USDC:" + issuerB: decimal.RequireFromString("200.0000000"),
+	}
+
+	acct := horizon.Account{
+		Balances: []horizon.Balance{
+			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
+			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerB}, Balance: "200.0000000"},
+		},
+	}
+
+	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
+	wr := &mockWalletRepo{
+		wallets:  []*domain.Wallet{wallet},
+		balances: map[string]map[string]decimal.Decimal{"w1": dbBalances},
+	}
+	svc := newSvc(&mockRepo{}, stl, &mockWebhookSvc{})
+	svc.walletRepo = wr
+
+	err := svc.checkWalletBalance(context.Background(), wallet)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(wr.discreps) != 0 {
+		t.Fatalf("expected 0 discrepancies, got %d", len(wr.discreps))
+	}
+}
+
+func TestCheckWalletBalance_TwoIssuersSameCodeDiscrepancyOnOne(t *testing.T) {
+	// Both issuers share "USDC". Issuer A matches, but Issuer B diverges.
+	// Only Issuer B should produce a discrepancy.
+	issuerA := "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACODEA"
+	issuerB := "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBICODEB"
+
+	wallet := &domain.Wallet{ID: "w1", PublicKey: "GWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+
+	dbBalances := map[string]decimal.Decimal{
+		"USDC:" + issuerA: decimal.RequireFromString("100.0000000"),
+		"USDC:" + issuerB: decimal.RequireFromString("200.0000000"),
+	}
+
+	acct := horizon.Account{
+		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
+			// Issuer B: Horizon has 150 but DB has 200.
+			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerB}, Balance: "150.0000000"},
+			},
+		}
+
+	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
+	wr := &mockWalletRepo{
+		wallets:  []*domain.Wallet{wallet},
+		balances: map[string]map[string]decimal.Decimal{"w1": dbBalances},
+	}
+	svc := newSvc(&mockRepo{}, stl, &mockWebhookSvc{})
+	svc.walletRepo = wr
+
+	err := svc.checkWalletBalance(context.Background(), wallet)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(wr.discreps) != 1 {
+		t.Fatalf("expected 1 discrepancy (only issuer B), got %d", len(wr.discreps))
+	}
+	d := wr.discreps[0]
+	expectedAsset := "USDC:" + issuerB
+	if d.Asset != expectedAsset {
+		t.Fatalf("expected discrepancy asset=%q, got %q", expectedAsset, d.Asset)
+	}
+	if !d.DBBalance.Equal(decimal.RequireFromString("200.0000000")) {
+		t.Fatalf("expected DB balance 200, got %s", d.DBBalance)
+	}
+	if !d.HorizonBalance.Equal(decimal.RequireFromString("150.0000000")) {
+		t.Fatalf("expected Horizon balance 150, got %s", d.HorizonBalance)
+	}
+}
+
+func TestCheckWalletBalance_NativeXLM(t *testing.T) {
+	wallet := &domain.Wallet{ID: "w1", PublicKey: "GWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+
+	dbBalances := map[string]decimal.Decimal{
+		"XLM": decimal.RequireFromString("500.0000000"),
+	}
+
+	acct := horizon.Account{
+		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "native"}, Balance: "500.0000000"},
+			},
+		}
+
+	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
+	wr := &mockWalletRepo{
+		wallets:  []*domain.Wallet{wallet},
+		balances: map[string]map[string]decimal.Decimal{"w1": dbBalances},
+	}
+	svc := newSvc(&mockRepo{}, stl, &mockWebhookSvc{})
+	svc.walletRepo = wr
+
+	err := svc.checkWalletBalance(context.Background(), wallet)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(wr.discreps) != 0 {
+		t.Fatalf("expected 0 discrepancies for matching XLM, got %d", len(wr.discreps))
+	}
+}
+
+func TestCheckWalletBalance_NativeXLMDiscrepancy(t *testing.T) {
+	wallet := &domain.Wallet{ID: "w1", PublicKey: "GWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+
+	dbBalances := map[string]decimal.Decimal{
+		"XLM": decimal.RequireFromString("500.0000000"),
+	}
+
+	acct := horizon.Account{
+		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "native"}, Balance: "450.0000000"},
+			},
+		}
+
+	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
+	wr := &mockWalletRepo{
+		wallets:  []*domain.Wallet{wallet},
+		balances: map[string]map[string]decimal.Decimal{"w1": dbBalances},
+	}
+	svc := newSvc(&mockRepo{}, stl, &mockWebhookSvc{})
+	svc.walletRepo = wr
+
+	err := svc.checkWalletBalance(context.Background(), wallet)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(wr.discreps) != 1 {
+		t.Fatalf("expected 1 discrepancy for XLM mismatch, got %d", len(wr.discreps))
+	}
+	if wr.discreps[0].Asset != "XLM" {
+		t.Fatalf("expected asset=\"XLM\", got %q", wr.discreps[0].Asset)
+	}
+}
+
+func TestCheckWalletBalance_DBAbsentIssuerNotCollapsed(t *testing.T) {
+	// DB only has USDC from issuer A. Horizon has USDC from both issuers.
+	// Issuer B should appear as a discrepancy (DB=0, Horizon=50).
+	issuerA := "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACODEA"
+	issuerB := "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBICODEB"
+
+	wallet := &domain.Wallet{ID: "w1", PublicKey: "GWALLETXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"}
+
+	dbBalances := map[string]decimal.Decimal{
+		"USDC:" + issuerA: decimal.RequireFromString("100.0000000"),
+	}
+
+	acct := horizon.Account{
+		Balances: []horizon.Balance{			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerA}, Balance: "100.0000000"},
+			{Asset: base.Asset{Type: "credit_alphanum4", Code: "USDC", Issuer: issuerB}, Balance: "50.0000000"},
+			},
+		}
+
+	stl := &balanceStellarClient{accounts: map[string]horizon.Account{wallet.PublicKey: acct}}
+	wr := &mockWalletRepo{
+		wallets:  []*domain.Wallet{wallet},
+		balances: map[string]map[string]decimal.Decimal{"w1": dbBalances},
+	}
+	svc := newSvc(&mockRepo{}, stl, &mockWebhookSvc{})
+	svc.walletRepo = wr
+
+	err := svc.checkWalletBalance(context.Background(), wallet)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(wr.discreps) != 1 {
+		t.Fatalf("expected 1 discrepancy for missing issuer B, got %d", len(wr.discreps))
+	}
+	d := wr.discreps[0]
+	expectedAsset := "USDC:" + issuerB
+	if d.Asset != expectedAsset {
+		t.Fatalf("expected discrepancy asset=%q, got %q", expectedAsset, d.Asset)
+	}
+	if !d.DBBalance.IsZero() {
+		t.Fatalf("expected DB balance 0 for absent issuer, got %s", d.DBBalance)
+	}
+	if !d.HorizonBalance.Equal(decimal.RequireFromString("50.0000000")) {
+		t.Fatalf("expected Horizon balance 50, got %s", d.HorizonBalance)
+	}
 }
