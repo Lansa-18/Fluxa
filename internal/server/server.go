@@ -15,6 +15,7 @@ import (
 	"github.com/fluxa/fluxa/internal/fees"
 	"github.com/fluxa/fluxa/internal/fiat"
 	"github.com/fluxa/fluxa/internal/fx"
+	fluxahealth "github.com/fluxa/fluxa/internal/health"
 	"github.com/fluxa/fluxa/internal/org"
 	"github.com/fluxa/fluxa/internal/postgres"
 	"github.com/fluxa/fluxa/internal/reconcile"
@@ -64,7 +65,15 @@ func New(
 	r.Use(MaxBodySize(1 << 20))
 	r.Use(MetricsMiddleware)
 
-	r.Get("/health", HealthHandler(healthChecks))
+	componentProbes := make(map[string]fluxahealth.Probe, len(healthChecks))
+	for name, check := range healthChecks {
+		probe := check
+		componentProbes[name] = func(ctx context.Context) (interface{}, error) { return nil, probe(ctx) }
+	}
+	healthService := fluxahealth.New(componentProbes)
+	r.Get("/health", healthService.Handler())
+	r.Get("/health/ready", healthService.ReadyHandler())
+	r.Get("/health/live", fluxahealth.LiveHandler())
 	r.Get("/metrics", MetricsHandler)
 
 	r.Route("/v1", func(r chi.Router) {

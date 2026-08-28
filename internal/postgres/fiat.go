@@ -7,14 +7,13 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type FiatRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewFiatRepo(db *pgxpool.Pool) *FiatRepo {
+func NewFiatRepo(db DB) *FiatRepo {
 	return &FiatRepo{db: db}
 }
 

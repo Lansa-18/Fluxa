@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -12,7 +13,11 @@ type Config struct {
 	Port                        string
 	Env                         string
 	DatabaseURL                 string
+	ReplicaDatabaseURL          string
 	RedisURL                    string
+	RedisSentinelMasterName     string
+	RedisSentinelAddrs          []string
+	RedisSentinelPassword       string
 	StellarNetwork              string
 	StellarHorizonURL           string
 	StellarUSDCIssuer           string
@@ -37,6 +42,17 @@ type Config struct {
 	YellowCardAPIKey            string
 	YellowCardWebhookKey        string
 	YellowCardSandbox           bool
+	WorkerEnabled               bool
+}
+
+func splitCSV(value string) []string {
+	parts := []string{}
+	for _, part := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
 }
 
 func Load() (*Config, error) {
@@ -54,6 +70,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("CONTRACT_WALLET_WINDOW_SECONDS", "86400")
 	viper.SetDefault("CONTRACT_WALLET_RECOVERY_THRESHOLD", "2")
 	viper.SetDefault("YELLOW_CARD_SANDBOX", "true")
+	viper.SetDefault("WORKER_ENABLED", "true")
 
 	viper.SetConfigFile(".env")
 	viper.SetConfigType("env")
@@ -84,12 +101,17 @@ func Load() (*Config, error) {
 	}
 
 	ycSandbox, _ := strconv.ParseBool(viper.GetString("YELLOW_CARD_SANDBOX"))
+	workerEnabled, _ := strconv.ParseBool(viper.GetString("WORKER_ENABLED"))
 
 	return &Config{
 		Port:                        viper.GetString("PORT"),
 		Env:                         env,
 		DatabaseURL:                 viper.GetString("DATABASE_URL"),
+		ReplicaDatabaseURL:          viper.GetString("REPLICA_DATABASE_URL"),
 		RedisURL:                    viper.GetString("REDIS_URL"),
+		RedisSentinelMasterName:     viper.GetString("REDIS_SENTINEL_MASTER_NAME"),
+		RedisSentinelAddrs:          splitCSV(viper.GetString("REDIS_SENTINEL_ADDRS")),
+		RedisSentinelPassword:       viper.GetString("REDIS_SENTINEL_PASSWORD"),
 		StellarNetwork:              viper.GetString("STELLAR_NETWORK"),
 		StellarHorizonURL:           viper.GetString("STELLAR_HORIZON_URL"),
 		StellarUSDCIssuer:           viper.GetString("STELLAR_USDC_ISSUER"),
@@ -114,5 +136,6 @@ func Load() (*Config, error) {
 		YellowCardAPIKey:            viper.GetString("YELLOW_CARD_API_KEY"),
 		YellowCardWebhookKey:        viper.GetString("YELLOW_CARD_WEBHOOK_KEY"),
 		YellowCardSandbox:           ycSandbox,
+		WorkerEnabled:               workerEnabled,
 	}, nil
 }

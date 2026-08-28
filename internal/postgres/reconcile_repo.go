@@ -6,17 +6,16 @@ import (
 
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/reconcile"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 // ReconcileRepo implements reconcile.WalletRepository, covering wallet listing,
 // DB balance reads, and balance discrepancy persistence.
 type ReconcileRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewReconcileRepo(db *pgxpool.Pool) *ReconcileRepo {
+func NewReconcileRepo(db DB) *ReconcileRepo {
 	return &ReconcileRepo{db: db}
 }
 
