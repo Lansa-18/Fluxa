@@ -1,10 +1,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
-	"time"
-
 	"strings"
+	"time"
 
 	"github.com/fluxa/fluxa/internal/apikey"
 	"github.com/fluxa/fluxa/internal/auth"
@@ -80,7 +80,17 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte) func(http.Handler) http.Handler {
+// MembershipValidator revalidates a user's current membership and role
+// against the database on every authenticated request.
+type MembershipValidator interface {
+	GetMember(ctx context.Context, tenantID, userID string) (*domain.OrgMember, error)
+}
+
+// AuthMiddleware validates the JWT or API key and, for JWT auth, revalidates
+// the user's membership and role against the database so that demotions,
+// removals, and role changes take effect immediately rather than at token
+// expiry.
+func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte, validator MembershipValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -95,6 +105,17 @@ func AuthMiddleware(repo *postgres.APIKeyRepo, jwtSecret []byte) func(http.Handl
 			if strings.Count(rawToken, ".") == 2 {
 				claims, err := auth.ParseToken(rawToken, jwtSecret)
 				if err == nil && claims.TokenType == "access" {
+					// Revalidate membership against the database so stale tokens
+					// cannot be used after removal or demotion.
+					if validator != nil {
+						member, mErr := validator.GetMember(r.Context(), claims.TenantID, claims.Sub)
+						if mErr != nil || member == nil {
+							http.Error(w, "membership not found or revoked", http.StatusForbidden)
+							return
+						}
+						// Use the current role from the database, not the stale JWT claim.
+						claims.Role = member.Role
+					}
 					ctx := tenant.WithID(r.Context(), claims.TenantID)
 					ctx = tenant.WithUser(ctx, claims.Sub, claims.Role)
 					next.ServeHTTP(w, r.WithContext(ctx))
