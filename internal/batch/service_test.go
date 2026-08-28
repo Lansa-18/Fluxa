@@ -59,7 +59,15 @@ func (f *fakeTxRepo) GetByID(_ context.Context, id string) (*domain.Transaction,
 	return nil, domain.ErrTransactionNotFound
 }
 
+func (f *fakeTxRepo) ClaimForSubmission(_ context.Context, id string) error {
+	return nil
+}
+
 func (f *fakeTxRepo) UpdateStatus(_ context.Context, id string, status domain.TransactionStatus, txHash string) error {
+	return nil
+}
+
+func (f *fakeTxRepo) UpsertByTxHash(_ context.Context, tx *domain.Transaction) error {
 	return nil
 }
 

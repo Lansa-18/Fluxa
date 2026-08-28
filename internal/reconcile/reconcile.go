@@ -81,6 +81,13 @@ type BalanceDiscrepancy struct {
 type Repository interface {
 	GetConfirmedTxesForReconciliation(ctx context.Context, since time.Duration) ([]*domain.Transaction, error)
 	GetStuckPendingTxes(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error)
+	// ResetStuckSubmittedToPending recovers a transaction claimed
+	// (status=submitted) by a worker that crashed before recording a
+	// tx_hash, so nothing may have reached the network. Gated on age so an
+	// in-flight worker still within its normal processing window is never
+	// touched. No-op (via domain.ErrConcurrentUpdate) for a pending
+	// transaction, which needs no reset before being re-enqueued.
+	ResetStuckSubmittedToPending(ctx context.Context, id string, olderThan time.Duration) error
 	GetPendingTxesForReconciliation(ctx context.Context, olderThan time.Duration) ([]*domain.Transaction, error)
 	UpdateReconciliationStatus(ctx context.Context, id string, status domain.TransactionStatus) error
 	UpdateTxConfirmed(ctx context.Context, id, txHash string) error
@@ -111,17 +118,17 @@ type WalletLookup interface {
 }
 
 type Service struct {
-	repo               Repository
-	walletRepo         WalletRepository
-	walletLookup       WalletLookup
-	stellar            stellar.Client
-	alerting           *alerting.Client
-	queue              *queue.Client
-	webhookSvc         webhook.Service
-	svcName            string
-	balanceThreshold   decimal.Decimal
-	assetRegistry      *assets.Registry
-	platformFeeWallet  string
+	repo              Repository
+	walletRepo        WalletRepository
+	walletLookup      WalletLookup
+	stellar           stellar.Client
+	alerting          *alerting.Client
+	queue             *queue.Client
+	webhookSvc        webhook.Service
+	svcName           string
+	balanceThreshold  decimal.Decimal
+	assetRegistry     *assets.Registry
+	platformFeeWallet string
 }
 
 func NewService(
@@ -583,6 +590,22 @@ func (s *Service) RecoverPending(ctx context.Context) error {
 	log.Info().Int("count", len(txes)).Msg("reconcile: recovering stuck pending transactions")
 
 	for _, tx := range txes {
+		if tx.Status == domain.StatusSubmitted {
+			// This row was claimed by a worker that crashed before it could
+			// record a tx_hash — nothing may have reached the network. Reset
+			// it to pending so ClaimForSubmission (deliberately strict:
+			// pending-only) will accept a fresh attempt.
+			if err := s.repo.ResetStuckSubmittedToPending(ctx, tx.ID, stuckThreshold); err != nil {
+				if errors.Is(err, domain.ErrConcurrentUpdate) {
+					log.Info().Str("tx_id", tx.ID).
+						Msg("reconcile: stuck submitted tx no longer eligible for reset (already progressed)")
+				} else {
+					log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: reset stuck submitted tx to pending")
+				}
+				continue
+			}
+		}
+
 		newCount, err := s.repo.IncrementRequeueCount(ctx, tx.ID)
 		if err != nil {
 			log.Error().Err(err).Str("tx_id", tx.ID).Msg("reconcile: increment requeue count")
@@ -667,7 +690,7 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 	}
 
 	for asset := range assets {
-		dbAmt := dbBalances[asset]       // zero-value decimal if key absent
+		dbAmt := dbBalances[asset] // zero-value decimal if key absent
 		horizonAmt := horizonBalances[asset]
 		diff := dbAmt.Sub(horizonAmt).Abs()
 		if diff.LessThanOrEqual(s.balanceThreshold) {

@@ -56,7 +56,13 @@ func (m *mockTxRepo) CreateWithMonthlyLimit(ctx context.Context, tx *domain.Tran
 func (m *mockTxRepo) GetByID(ctx context.Context, id string) (*domain.Transaction, error) {
 	return nil, nil
 }
+func (m *mockTxRepo) ClaimForSubmission(ctx context.Context, id string) error {
+	return nil
+}
 func (m *mockTxRepo) UpdateStatus(ctx context.Context, id string, status domain.TransactionStatus, txHash string) error {
+	return nil
+}
+func (m *mockTxRepo) UpsertByTxHash(ctx context.Context, tx *domain.Transaction) error {
 	return nil
 }
 func (m *mockTxRepo) ListByWallet(ctx context.Context, walletID string, limit, offset int) ([]*domain.Transaction, error) {
