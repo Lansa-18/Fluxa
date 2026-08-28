@@ -71,6 +71,11 @@ func New(
 		// Unauthenticated public endpoints
 		r.Route("/auth", authHandler.Routes())
 		r.Post("/org/invites/accept", orgHandler.AcceptInvite)
+		// Registered as a direct path (not r.Route("/webhooks", ...)) because
+		// the authenticated group below already mounts a "/webhooks"
+		// sub-router for Register/List/Delete/deliveries; chi doesn't support
+		// mounting two independent sub-routers at the same pattern.
+		r.With(webhook.VerifyRateLimit()).Post("/webhooks/verify", webhookHandler.Verify)
 
 		// Authenticated endpoints
 		r.Group(func(r chi.Router) {
