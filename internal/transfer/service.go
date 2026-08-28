@@ -83,17 +83,11 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 	}
 
 	tenantID := tenant.IDFromContext(ctx)
+	var monthlyLimit int
 	if tenantID != "" && s.tenantRepo != nil {
 		t, err := s.tenantRepo.GetByID(ctx, tenantID)
 		if err == nil && t != nil {
-			limit := t.GetTransferLimit()
-			if limit > 0 {
-				now := time.Now().UTC()
-				count, err := s.repo.CountMonthlyTransfersByTenant(ctx, tenantID, now.Year(), now.Month())
-				if err == nil && count >= limit {
-					return nil, domain.ErrTransferLimitReached
-				}
-			}
+			monthlyLimit = t.GetTransferLimit()
 		}
 	}
 
@@ -144,8 +138,15 @@ func (s *service) initiate(ctx context.Context, fromID, toID, asset string, amou
 		IdempotencyKey: idempotencyKey,
 	}
 
-	if err := s.repo.Create(ctx, tx); err != nil {
-		return nil, fmt.Errorf("persist transaction: %w", err)
+	if monthlyLimit > 0 {
+		now := time.Now().UTC()
+		if err := s.repo.CreateWithMonthlyLimit(ctx, tx, tenantID, now.Year(), now.Month(), monthlyLimit); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.repo.Create(ctx, tx); err != nil {
+			return nil, fmt.Errorf("persist transaction: %w", err)
+		}
 	}
 
 	if s.queue != nil {
