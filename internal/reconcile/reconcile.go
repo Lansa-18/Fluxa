@@ -648,10 +648,11 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 		return fmt.Errorf("get DB balances for wallet %s: %w", w.ID, err)
 	}
 
-	// Build asset → balance map from Horizon.
+	// Build asset → balance map from Horizon, keyed by canonical identity
+	// (e.g. "XLM" for native, "USDC:GXXXX" for credit assets).
 	horizonBalances := make(map[string]decimal.Decimal)
 	for _, b := range acct.Balances {
-		asset := assetCode(&b)
+		asset := horizonAssetIdentity(&b)
 		amt, _ := decimal.NewFromString(b.Balance)
 		horizonBalances[asset] = horizonBalances[asset].Add(amt)
 	}
@@ -698,11 +699,14 @@ func (s *Service) checkWalletBalance(ctx context.Context, w *domain.Wallet) erro
 	return nil
 }
 
-func assetCode(b *horizon.Balance) string {
+// horizonAssetIdentity returns a canonical string that uniquely identifies a
+// Horizon balance asset: "XLM" for native, or "CODE:ISSUER" for credit assets.
+// This ensures two issuers sharing the same asset code are compared independently.
+func horizonAssetIdentity(b *horizon.Balance) string {
 	if b.Asset.Type == "native" {
 		return "XLM"
 	}
-	return b.Asset.Code
+	return b.Asset.Code + ":" + b.Asset.Issuer
 }
 
 func (s *Service) GetSummary(ctx context.Context, days int) (*SummaryResponse, error) {
