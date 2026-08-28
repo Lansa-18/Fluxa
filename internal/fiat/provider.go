@@ -50,17 +50,23 @@ type (
 	RailEvent struct {
 		Type        string
 		ProviderRef string
-		Status      string
-		Amount      decimal.Decimal
-		Currency    string
+		// EventID is the provider's own unique identifier for this
+		// occurrence (e.g. Flutterwave's numeric transaction id). Unlike
+		// ProviderRef (the merchant-supplied reference, stable across a
+		// retried/replayed delivery of the same event), this identifies
+		// the specific delivery/charge.
+		EventID  string
+		Status   string
+		Amount   decimal.Decimal
+		Currency string
 	}
 )
 
 const (
-	EventDepositConfirmed  = "deposit.confirmed"
-	EventDepositFailed     = "deposit.failed"
-	EventWithdrawalSent    = "withdrawal.sent"
-	EventWithdrawalFailed  = "withdrawal.failed"
+	EventDepositConfirmed = "deposit.confirmed"
+	EventDepositFailed    = "deposit.failed"
+	EventWithdrawalSent   = "withdrawal.sent"
+	EventWithdrawalFailed = "withdrawal.failed"
 )
 
 type Provider interface {
