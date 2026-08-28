@@ -35,13 +35,33 @@ func (r *FiatRepo) CreateDeposit(ctx context.Context, d *domain.FiatDeposit) err
 }
 
 func (r *FiatRepo) UpdateDepositStatus(ctx context.Context, id, status string) error {
-	query := `UPDATE fiat_deposits SET status = $1 WHERE id = $2 AND status = 'pending'`
+	// Allows the pending->processing->{completed,failed} lifecycle: a
+	// deposit may be moved as long as it hasn't already reached a terminal
+	// state. Terminal deposits are left untouched.
+	query := `UPDATE fiat_deposits SET status = $1 WHERE id = $2 AND status NOT IN ('completed', 'failed')`
 	tag, err := r.db.Exec(ctx, query, status, id)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("deposit %s already processed or not pending", id)
+		return fmt.Errorf("deposit %s already processed or terminal", id)
+	}
+	return nil
+}
+
+// ClaimDepositForProcessing atomically transitions a deposit from pending to
+// processing. The WHERE clause makes this a single conditional UPDATE: under
+// concurrent/duplicate webhook deliveries for the same deposit, the database
+// serializes the two UPDATEs against the same row and only one can affect
+// it — the loser gets RowsAffected() == 0 and must not move any funds.
+func (r *FiatRepo) ClaimDepositForProcessing(ctx context.Context, id string) error {
+	query := `UPDATE fiat_deposits SET status = $1 WHERE id = $2 AND status = $3`
+	tag, err := r.db.Exec(ctx, query, domain.FiatStatusProcessing, id, domain.FiatStatusPending)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("deposit %s already claimed or not pending", id)
 	}
 	return nil
 }

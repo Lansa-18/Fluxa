@@ -16,7 +16,6 @@ type Wallet struct {
 	PublicKey       string
 	EncryptedSecret string
 	TenantID        *string
-	SyncCursor      string
 	CreatedAt       time.Time
 	// SyncCursor is the Horizon paging token of the last payment operation
 	// processed for this wallet, used to resume incremental sync.
@@ -35,4 +34,3 @@ type BalanceRecord struct {
 	Balance   string
 	UpdatedAt time.Time
 }
-
