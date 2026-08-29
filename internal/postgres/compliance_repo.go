@@ -9,16 +9,33 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type ComplianceRepo struct {
-	db *pgxpool.Pool
+	db DB
+	// primary is used for the reads that back a compliance decision. The
+	// screening queries count recent transfers inside windows as short as ten
+	// minutes, and a burst of transfers is exactly what the velocity rule
+	// exists to catch — reading those counts from a replica that is seconds
+	// behind (entirely possible across regions) would undercount the burst and
+	// silently weaken the control. Bulk sanctions-list reads stay on db, where
+	// replica lag is harmless and read-scaling is the point.
+	primary DB
 }
 
-func NewComplianceRepo(db *pgxpool.Pool) *ComplianceRepo {
-	return &ComplianceRepo{db: db}
+func NewComplianceRepo(db DB) *ComplianceRepo {
+	return &ComplianceRepo{db: db, primary: db}
+}
+
+// WithPrimary routes compliance-decision reads at the primary, bypassing any
+// read replica. Without it the repo falls back to its main handle, so a
+// single-region deployment needs no extra wiring.
+func (r *ComplianceRepo) WithPrimary(primary DB) *ComplianceRepo {
+	if primary != nil {
+		r.primary = primary
+	}
+	return r
 }
 
 const reviewColumns = `id, transaction_id, org_id, status, risk_score, rules_fired, reason,
@@ -58,7 +75,7 @@ func (r *ComplianceRepo) GetReview(ctx context.Context, id string) (*domain.Comp
 		args = append(args, tID)
 	}
 
-	review, err := scanReview(r.db.QueryRow(ctx, query, args...))
+	review, err := scanReview(r.primary.QueryRow(ctx, query, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrComplianceReviewNotFound
@@ -86,7 +103,7 @@ func (r *ComplianceRepo) ListReviews(ctx context.Context, status string, limit, 
 	args = append(args, offset)
 	query += fmt.Sprintf(` OFFSET $%d`, len(args))
 
-	rows, err := r.db.Query(ctx, query, args...)
+	rows, err := r.primary.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list compliance reviews: %w", err)
 	}
@@ -255,7 +272,7 @@ func (r *ComplianceRepo) LatestSanctionsUpdate(ctx context.Context) (*domain.San
 // CountTransfersByOrgSince backs the velocity rule.
 func (r *ComplianceRepo) CountTransfersByOrgSince(ctx context.Context, orgID string, since time.Time) (int, error) {
 	var count int
-	err := r.db.QueryRow(ctx,
+	err := r.primary.QueryRow(ctx,
 		`SELECT COUNT(*) FROM transactions
 		 WHERE tenant_id = $1 AND type = 'transfer' AND created_at >= $2`,
 		orgID, since,
@@ -278,7 +295,7 @@ func (r *ComplianceRepo) AggregateTransfersToDestinationSince(ctx context.Contex
 
 	var count int
 	var sum string
-	if err := r.db.QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
+	if err := r.primary.QueryRow(ctx, query, args...).Scan(&count, &sum); err != nil {
 		return 0, decimal.Zero, fmt.Errorf("aggregate transfers to destination: %w", err)
 	}
 	total, err := decimal.NewFromString(sum)
@@ -291,7 +308,7 @@ func (r *ComplianceRepo) AggregateTransfersToDestinationSince(ctx context.Contex
 // HasInboundTransferSince backs the round-trip rule.
 func (r *ComplianceRepo) HasInboundTransferSince(ctx context.Context, walletID, counterpartyWalletID string, since time.Time) (bool, error) {
 	var exists bool
-	err := r.db.QueryRow(ctx,
+	err := r.primary.QueryRow(ctx,
 		`SELECT EXISTS(
 		   SELECT 1 FROM transactions
 		   WHERE to_wallet = $1 AND from_wallet = $2 AND created_at >= $3

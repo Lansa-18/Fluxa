@@ -24,6 +24,8 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/shopspring/decimal"
@@ -35,6 +37,11 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("load config")
+	}
+
+	if !cfg.WorkerEnabled {
+		log.Info().Msg("worker disabled for this region")
+		return
 	}
 
 	if cfg.Env == "development" {
@@ -51,15 +58,26 @@ func main() {
 		log.Fatal().Err(err).Msg("connect to database")
 	}
 	defer db.Close()
+	var replica *pgxpool.Pool
+	if cfg.ReplicaDatabaseURL != "" {
+		replica, err = postgres.New(ctx, cfg.ReplicaDatabaseURL)
+		if err != nil {
+			log.Warn().Err(err).Msg("connect to read replica; reads will use primary")
+		}
+		if replica != nil {
+			defer replica.Close()
+		}
+	}
+	repoDB := postgres.NewReplicaAwareDB(db, replica)
 
-	walletRepo := postgres.NewWalletRepo(db)
-	txRepo := postgres.NewTransactionRepo(db)
-	feeRepo := postgres.NewFeeRepo(db)
-	webhookRepo := postgres.NewWebhookRepo(db)
-	reconcileRepo := postgres.NewReconcileRepo(db)
-	scheduleRepo := postgres.NewScheduleRepo(db)
-	treasuryRepo := postgres.NewTreasuryRepo(db)
-	complianceRepo := postgres.NewComplianceRepo(db)
+	walletRepo := postgres.NewWalletRepo(repoDB)
+	txRepo := postgres.NewTransactionRepo(repoDB)
+	feeRepo := postgres.NewFeeRepo(repoDB)
+	webhookRepo := postgres.NewWebhookRepo(repoDB)
+	reconcileRepo := postgres.NewReconcileRepo(repoDB)
+	scheduleRepo := postgres.NewScheduleRepo(repoDB)
+	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
+	complianceRepo := postgres.NewComplianceRepo(repoDB).WithPrimary(db)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
@@ -88,7 +106,32 @@ func main() {
 	}()
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-worker")
-	qClient := queue.NewClient(cfg.RedisURL)
+	asynqOpt, err := queue.AsynqRedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure asynq redis")
+	}
+	qClient := queue.NewClientWithOptions(asynqOpt)
+	defer qClient.Close()
+	redisOpt, err := queue.RedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure redis")
+	}
+	redisClient := redis.NewUniversalClient(redisOpt)
+	defer redisClient.Close()
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			if err := redisClient.Set(ctx, "fluxa:worker:heartbeat", time.Now().UTC().Format(time.RFC3339Nano), 30*time.Second).Err(); err != nil {
+				log.Warn().Err(err).Msg("worker heartbeat failed")
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	webhookSvc := webhook.NewService(webhookRepo, qClient)
 	webhookWorker := webhook.NewWorker(webhookSvc)
@@ -166,9 +209,8 @@ func main() {
 	)
 	reconcileWorker := reconcile.NewWorker(reconcileSvc)
 
-	redisOpt, _ := asynq.ParseRedisURI(cfg.RedisURL)
+	srv := asynq.NewServer(asynqOpt, asynq.Config{
 
-	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,
 		Queues: map[string]int{
 			"critical": 6,
@@ -189,7 +231,7 @@ func main() {
 		mux.HandleFunc(queue.TypeRefreshSanctions, complianceWorker.HandleRefreshSanctions)
 	}
 
-	scheduler := asynq.NewScheduler(redisOpt, nil)
+	scheduler := asynq.NewScheduler(asynqOpt, nil)
 
 	syncTask := asynq.NewTask(queue.TypeSyncLedger, nil)
 	if _, err := scheduler.Register("@every 30s", syncTask); err != nil {

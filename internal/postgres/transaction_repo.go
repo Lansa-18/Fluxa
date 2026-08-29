@@ -10,15 +10,14 @@ import (
 	"github.com/fluxa/fluxa/internal/reconcile"
 	"github.com/fluxa/fluxa/internal/tenant"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 )
 
 type TransactionRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewTransactionRepo(db *pgxpool.Pool) *TransactionRepo {
+func NewTransactionRepo(db DB) *TransactionRepo {
 	return &TransactionRepo{db: db}
 }
 

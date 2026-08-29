@@ -13,8 +13,19 @@ type Client struct {
 }
 
 func NewClient(redisURL string) *Client {
-	opt, _ := asynq.ParseRedisURI(redisURL)
+	return NewClientWithOptions(MustRedisOptions(redisURL, "", nil, ""))
+}
+
+func NewClientWithOptions(opt asynq.RedisConnOpt) *Client {
 	return &Client{inner: asynq.NewClient(opt)}
+}
+
+func MustRedisOptions(redisURL, master string, addrs []string, password string) asynq.RedisConnOpt {
+	opt, err := AsynqRedisOptions(redisURL, master, addrs, password)
+	if err != nil {
+		panic(err)
+	}
+	return opt
 }
 
 func (c *Client) Close() error {
