@@ -36,6 +36,7 @@ import (
 	"github.com/fluxa/fluxa/internal/wallet"
 	"github.com/fluxa/fluxa/internal/webhook"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -75,38 +76,54 @@ func main() {
 		log.Fatal().Err(err).Msg("connect to database")
 	}
 	defer db.Close()
+	var replica *pgxpool.Pool
+	if cfg.ReplicaDatabaseURL != "" {
+		replica, err = postgres.New(ctx, cfg.ReplicaDatabaseURL)
+		if err != nil {
+			log.Warn().Err(err).Msg("connect to read replica; reads will use primary")
+		}
+		if replica != nil {
+			defer replica.Close()
+		}
+	}
+	repoDB := postgres.NewReplicaAwareDB(db, replica)
 
-	redisOpt, err := redis.ParseURL(cfg.RedisURL)
+	redisOpt, err := queue.RedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
 	if err != nil {
 		log.Fatal().Err(err).Msg("parse redis url")
 	}
-	redisClient := redis.NewClient(redisOpt)
+	redisClient := redis.NewUniversalClient(redisOpt)
 	defer redisClient.Close()
 
-	tenantRepo := postgres.NewTenantRepo(db)
-	userRepo := postgres.NewUserRepo(db)
-	orgRepo := postgres.NewOrgRepo(db)
+	tenantRepo := postgres.NewTenantRepo(repoDB)
+	userRepo := postgres.NewUserRepo(repoDB)
+	orgRepo := postgres.NewOrgRepo(repoDB)
 
-	walletRepo := postgres.NewWalletRepo(db)
-	txRepo := postgres.NewTransactionRepo(db)
-	convRepo := postgres.NewConversionRepo(db)
-	feeRepo := postgres.NewFeeRepo(db)
-	apiKeyRepo := postgres.NewAPIKeyRepo(db)
-	fiatRepo := postgres.NewFiatRepo(db)
-	webhookRepo := postgres.NewWebhookRepo(db)
-	reconcileRepo := postgres.NewReconcileRepo(db)
-	fxQuoteRepo := postgres.NewFXQuoteRepo(db)
-	batchRepo := postgres.NewBatchRepo(db)
-	scheduleRepo := postgres.NewScheduleRepo(db)
-	anchorRepo := postgres.NewAnchorRepo(db)
-	treasuryRepo := postgres.NewTreasuryRepo(db)
-	idempotencyRepo := postgres.NewIdempotencyRepo(db)
+	walletRepo := postgres.NewWalletRepo(repoDB)
+	txRepo := postgres.NewTransactionRepo(repoDB)
+
+	convRepo := postgres.NewConversionRepo(repoDB)
+	feeRepo := postgres.NewFeeRepo(repoDB)
+	apiKeyRepo := postgres.NewAPIKeyRepo(repoDB)
+	fiatRepo := postgres.NewFiatRepo(repoDB)
+	webhookRepo := postgres.NewWebhookRepo(repoDB)
+	reconcileRepo := postgres.NewReconcileRepo(repoDB)
+	fxQuoteRepo := postgres.NewFXQuoteRepo(repoDB)
+	batchRepo := postgres.NewBatchRepo(repoDB)
+	scheduleRepo := postgres.NewScheduleRepo(repoDB)
+	anchorRepo := postgres.NewAnchorRepo(repoDB)
+	treasuryRepo := postgres.NewTreasuryRepo(repoDB)
+	idempotencyRepo := postgres.NewIdempotencyRepo(repoDB)
 	idemMW := idempotency.Middleware(idempotencyRepo)
 
 	stellarClient := stellar.NewClient(cfg.StellarHorizonURL, cfg.StellarNetwork)
 	signer := stellar.NewEnvSigner(cfg.MasterEncryptionKey, cfg.StellarNetwork)
 
-	queueClient := queue.NewClient(cfg.RedisURL)
+	asynqOpt, err := queue.AsynqRedisOptions(cfg.RedisURL, cfg.RedisSentinelMasterName, cfg.RedisSentinelAddrs, cfg.RedisSentinelPassword)
+	if err != nil {
+		log.Fatal().Err(err).Msg("configure asynq redis")
+	}
+	queueClient := queue.NewClientWithOptions(asynqOpt)
 	defer queueClient.Close()
 
 	jwtSecretBytes := []byte(cfg.JWTSecret)
@@ -174,11 +191,7 @@ func main() {
 		}
 	}()
 
-	redisOpt2, err := asynq.ParseRedisURI(cfg.RedisURL)
-	if err != nil {
-		log.Fatal().Err(err).Msg("parse redis uri for asynq")
-	}
-	asynqSrv := asynq.NewServer(redisOpt2, asynq.Config{
+	asynqSrv := asynq.NewServer(asynqOpt, asynq.Config{
 		Concurrency: 5,
 		Queues: map[string]int{
 			"critical": 6,
@@ -190,12 +203,14 @@ func main() {
 	asynqMux.HandleFunc(queue.TypeProcessTransfer, settlementWorker.HandleProcessTransfer)
 	asynqMux.HandleFunc(queue.TypeSyncLedger, indexerWorker.HandleSyncLedger)
 
-	go func() {
-		log.Info().Msg("fluxa api: settlement/indexer asynq consumer starting")
-		if err := asynqSrv.Run(asynqMux); err != nil {
-			log.Error().Err(err).Msg("fluxa api: asynq consumer stopped")
-		}
-	}()
+	if cfg.WorkerEnabled {
+		go func() {
+			log.Info().Msg("fluxa api: settlement/indexer asynq consumer starting")
+			if err := asynqSrv.Run(asynqMux); err != nil {
+				log.Error().Err(err).Msg("fluxa api: asynq consumer stopped")
+			}
+		}()
+	}
 
 	alertClient := alerting.NewClient(cfg.AlertWebhookURL, "fluxa-api")
 	reconcileSvc := reconcile.NewService(
@@ -258,12 +273,19 @@ func main() {
 		feeHandler, reconcileHandler, apikeyHandler, apiKeyRepo,
 		webhookHandler, batchHandler, scheduleHandler, treasuryHandler, jwtSecretBytes, cfg.Port,
 		map[string]server.DependencyCheck{
-			"database": db.Ping,
-			"redis": func(ctx context.Context) error {
-				return redisClient.Ping(ctx).Err()
+			"postgres": db.Ping,
+			"replica":  func(ctx context.Context) error { return repoDB.ReplicaAvailable(ctx) },
+			"redis":    func(ctx context.Context) error { return redisClient.Ping(ctx).Err() },
+
+			"horizon": server.HorizonDependencyCheck(cfg.StellarHorizonURL),
+			"worker": func(ctx context.Context) error {
+				if _, err := redisClient.Get(ctx, "fluxa:worker:heartbeat").Result(); err != nil {
+					return err
+				}
+				return nil
 			},
-			"stellar": server.HTTPDependencyCheck(cfg.StellarHorizonURL),
 		},
+
 		orgRepo,
 	)
 

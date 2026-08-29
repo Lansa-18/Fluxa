@@ -8,14 +8,13 @@ import (
 	"github.com/fluxa/fluxa/internal/domain"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type WebhookRepo struct {
-	db *pgxpool.Pool
+	db DB
 }
 
-func NewWebhookRepo(db *pgxpool.Pool) *WebhookRepo {
+func NewWebhookRepo(db DB) *WebhookRepo {
 	return &WebhookRepo{db: db}
 }
 
@@ -224,4 +223,3 @@ func (r *WebhookRepo) CountByTenant(ctx context.Context, tenantID string) (int, 
 	}
 	return count, nil
 }
-
