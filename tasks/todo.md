@@ -65,7 +65,7 @@ follow-on mock drift. Fixed on this branch so the plan's verification
 
 ## Phase 6 — Docs
 
-- [x] `docs/errors.md`, `docs/openapi.yaml`, `README.md`, `ASSUMPTIONS.md`
+- [x] `docs/errors.md`, `docs/openapi.yaml`, `README.md`
 
 ---
 
@@ -91,7 +91,9 @@ sdk: npm run typecheck / build       clean
 
 - **Phase 0 was not in the plan.** `main` did not compile. Repaired 8 build
   errors plus test-mock drift across 5 packages before any of this could be
-  verified. See ASSUMPTIONS.md.
+  verified, plus four more found only by running against a real Postgres
+  (nullable fee scan, `COUNT(*) ... FOR UPDATE`, a 16-vs-21 column scan in
+  `ListByBatch`, and both enum-rollback migrations).
 - **`docs/fluxa.postman_collection.json` and `apps/web/src/lib/api.ts`** were
   updated too — CLAUDE.md's cross-cutting rule requires it and the plan's file
   list omitted them. No dashboard pages were added; the issue didn't ask.
@@ -108,4 +110,4 @@ sdk: npm run typecheck / build       clean
 counterparty-name field, so the fuzzy name rule cannot fire in production. It
 is implemented and unit-tested and starts working as soon as a name reaches
 the screener. Closing it needs a wallet-name migration the issue didn't ask
-for. Recorded in ASSUMPTIONS.md.
+for.
